@@ -286,5 +286,7 @@ demo_project/
 - Shadertoy – 创意灵感来源
 
 ---
+## Star History
 
+[![Star History Chart](https://api.star-history.com/svg?repos=sudoevolve/Evolve-Shader&type=Date)](https://www.star-history.com/#sudoevolve/Evolve-Shader&Date)
 👉 **Happy Coding & Evolving Shaders!**
