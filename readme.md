@@ -1,6 +1,6 @@
 
 
-# Evolve Shader Viewer
+# Evolve Shader
 
 A minimal **Shadertoy-like shader viewer** written in C++ with OpenGL 3.3 and GLFW.  
 Supports both shaders with textures (`iChannel0`) and shaders without textures. Provides realtime rendering with mouse interaction and FPS display.
@@ -18,7 +18,7 @@ Supports both shaders with textures (`iChannel0`) and shaders without textures. 
 
 ## 📌 简介
 
-``Evolve Shader Viewer是一个基于 OpenGL 的多通道着色器渲染程序，灵感来源于 [Shadertoy](https://www.shadertoy.com/)。它支持加载多个 `.frag` 片段着色器文件，并通过交互式配置实现复杂的多通道渲染（如后处理、反馈、图像输入等）。
+Evolve Shader Viewer是一个基于 OpenGL 的多通道着色器渲染程序，灵感来源于 [Shadertoy](https://www.shadertoy.com/)。它支持加载多个 `.frag` 片段着色器文件，并通过交互式配置实现复杂的多通道渲染（如后处理、反馈、图像输入等）。
 
 该程序允许用户：
 - 自定义每个着色器对其他缓冲区或图像的依赖。
