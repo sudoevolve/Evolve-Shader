@@ -123,7 +123,7 @@ int main() {
     if (!g_globalImages.empty()) {
         std::cout << "\nFound " << g_globalImages.size() << " global image(s):\n";
         for (size_t i = 0; i < g_globalImages.size(); ++i) {
-            std::cout << "  [" << i << "] " << g_globalImages[i].filename().string()
+            std::cout << "  [" << i + 1 << "] " << g_globalImages[i].filename().string()
                 << " (" << g_globalImages[i].parent_path().filename().string() << ")\n";
         }
     }
@@ -139,7 +139,7 @@ int main() {
     }
     std::cout << "\nFound " << fragFiles.size() << " shader(s):\n";
     for (size_t i = 0; i < fragFiles.size(); ++i) {
-        std::cout << "  [" << i << "] " << fs::path(fragFiles[i]).filename().string() << "\n";
+        std::cout << "  [" << i + 1 << "] " << fs::path(fragFiles[i]).filename().string() << "\n";
     }
 
     auto channelConfig = ConfigureChannelsInteractively(fragFiles, g_globalImages);

@@ -4,6 +4,8 @@
 #include <string>
 #include <iostream>
 #include <filesystem>
+#include <sstream>
+#include <map>
 
 namespace fs = std::filesystem;
 
@@ -22,8 +24,8 @@ inline std::vector<std::array<ChannelInput, 4>> ConfigureChannelsInteractively(
     for (auto& chs : configs) for (int i = 0; i < 4; ++i) chs[i].type = ChannelInput::NONE;
 
     std::cout << "\n=== Interactive iChannel Setup ===\n";
-    std::cout << " Press Enter for auto-chain (buffer0 -> buffer1 -> ...),\n";
-    std::cout << " or type a buffer index to configure manually: ";
+    std::cout << " Press Enter for auto-chain (buffer1 -> buffer2 -> ...),\n";
+    std::cout << " or type a buffer index (1 to " << N << ") to configure manually: ";
 
     std::string line;
     std::getline(std::cin, line);
@@ -33,39 +35,50 @@ inline std::vector<std::array<ChannelInput, 4>> ConfigureChannelsInteractively(
         for (int i = 1; i < N; ++i) {
             configs[i][0].type = ChannelInput::BUFFER;
             configs[i][0].bufferIndex = i - 1;
-            std::cout << "buffer" << i - 1 << " -> ";
+            std::cout << "buffer" << i << " -> ";
         }
-        if (N > 0) std::cout << "buffer" << N - 1 << "\n\n";
+        if (N > 0) std::cout << "buffer" << N << "\n\n";
         return configs;
     }
 
     while (true) {
         try {
-            int idx = std::stoi(line);
-            if (idx < 0 || idx >= N) {
-                std::cout << " Invalid index. Choose 0-" << N - 1 << ": ";
+            int idx_one_based = std::stoi(line);
+            if (idx_one_based < 1 || idx_one_based > N) {
+                std::cout << " Invalid index. Choose 1-" << N << ": ";
                 std::getline(std::cin, line);
                 continue;
             }
+            int idx = idx_one_based - 1; // Convert to 0-based index
+
             std::string fname = fs::path(files[idx]).filename().string();
-            std::cout << "\n Configuring buffer" << idx << " (" << fname << "):\n";
-            for (int c = 0; c < 4; ++c) {
-                std::cout << "\niChannel" << c << " source:\n";
-                std::cout << "  1: none\n";
-                std::cout << "  2: self (feedback)\n";
-                for (int b = 0; b < N; ++b) {
-                    if (b == idx) continue;
-                    std::cout << "  " << (b + 3) << ": buffer" << b << "\n";
+            std::cout << "\n Configuring buffer" << idx_one_based << " (" << fname << "):\n";
+
+            std::cout << "Enter up to 4 choices for iChannel0-3, separated by spaces.\n";
+            std::cout << "  1: none\n";
+            std::cout << "  2: self (feedback)\n";
+
+            std::map<int, int> choiceToBuffer;
+            int currentChoice = 3;
+            for (int b = 0; b < N; ++b) {
+                if (b == idx) continue;
+                choiceToBuffer[currentChoice] = b;
+                std::cout << "  " << currentChoice << ": buffer" << (b + 1) << "\n";
+                currentChoice++;
+            }
+
+            int imageBaseChoice = currentChoice;
+            if (!globalImages.empty()) {
+                for (size_t i = 0; i < globalImages.size(); ++i) {
+                    std::cout << "  " << imageBaseChoice + i << ": " << globalImages[i].filename().string() << "\n";
                 }
-                int base = N + 3;
-                if (!globalImages.empty()) {
-                    std::cout << "  " << base << "+: image (see list below)\n";
-                }
-                std::cout << "> ";
-                std::getline(std::cin, line);
-                int choice;
-                try { choice = std::stoi(line); }
-                catch (...) { choice = -1; }
+            }
+            std::cout << "> ";
+            std::getline(std::cin, line);
+            std::stringstream ss(line);
+            int choice;
+            int c = 0;
+            while (ss >> choice && c < 4) {
                 ChannelInput input;
                 if (choice == 1) {
                     input.type = ChannelInput::NONE;
@@ -74,42 +87,37 @@ inline std::vector<std::array<ChannelInput, 4>> ConfigureChannelsInteractively(
                     input.type = ChannelInput::BUFFER;
                     input.bufferIndex = idx;
                 }
-                else if (choice >= 3 && choice < base) {
-                    int src = choice - 3;
-                    if (src >= 0 && src < N && src != idx) {
-                        input.type = ChannelInput::BUFFER;
-                        input.bufferIndex = src;
-                    }
-                    else {
-                        std::cout << " Invalid buffer index. Skipping.\n"; continue;
-                    }
+                else if (choiceToBuffer.count(choice)) {
+                    input.type = ChannelInput::BUFFER;
+                    input.bufferIndex = choiceToBuffer[choice];
                 }
-                else if (!globalImages.empty() && choice >= base) {
-                    int imgChoice = choice - base;
+                else if (!globalImages.empty() && choice >= imageBaseChoice) {
+                    int imgChoice = choice - imageBaseChoice;
                     if (imgChoice >= 0 && imgChoice < (int)globalImages.size()) {
                         input.type = ChannelInput::IMAGE_GLOBAL;
                         input.imageIndex = imgChoice;
                     }
                     else {
-                        std::cout << " Invalid image index. Skipping.\n"; continue;
+                        std::cout << " Invalid image index: " << imgChoice + 1 << ". Skipping.\n";
+                        c++;
+                        continue;
                     }
                 }
                 else {
-                    std::cout << " Invalid choice. Skipping.\n"; continue;
+                    std::cout << " Invalid choice: " << choice << ". Skipping.\n";
+                    c++;
+                    continue;
                 }
                 configs[idx][c] = input;
                 std::cout << " Set iChannel" << c << " = ";
                 if (input.type == ChannelInput::NONE) std::cout << "none\n";
                 else if (input.type == ChannelInput::BUFFER && input.bufferIndex == idx) std::cout << "self\n";
-                else if (input.type == ChannelInput::BUFFER) std::cout << "buffer" << input.bufferIndex << "\n";
+                else if (input.type == ChannelInput::BUFFER) std::cout << "buffer" << (input.bufferIndex + 1) << "\n";
                 else if (input.type == ChannelInput::IMAGE_GLOBAL) std::cout << "image: " << globalImages[input.imageIndex].filename().string() << "\n";
-                if (c < 3) {
-                    std::cout << "1. Continue\n2. Skip\n> ";
-                    std::getline(std::cin, line);
-                    if (line != "1") break;
-                }
+                c++;
             }
-            std::cout << "\nEnter another index, or press Enter to finish: ";
+
+            std::cout << "\nEnter another index (1 to " << N << "), or press Enter to finish: ";
         }
         catch (...) { break; }
         std::getline(std::cin, line);
@@ -127,7 +135,7 @@ inline std::vector<std::array<ChannelInput, 4>> ConfigureChannelsInteractively(
         if (empty && i > 0) {
             configs[i][0].type = ChannelInput::BUFFER;
             configs[i][0].bufferIndex = i - 1;
-            std::cout << "[AUTO] Auto-connected buffer" << i << " <- buffer" << i - 1 << "\n";
+            std::cout << "[AUTO] Auto-connected buffer" << (i + 1) << " <- buffer" << i << "\n";
         }
     }
 
