@@ -6,6 +6,7 @@
 #include <vector>
 #include <array>
 #include <chrono>
+#include <ctime>
 #include <regex>
 #include <algorithm>
 #include <set>
@@ -59,14 +60,14 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
 }
 
 struct RenderResources {
-    std::vector<Framebuffer>* fbos;
-    std::vector<Texture>* prevFrameTextures;
+    std::vector<Framebuffer>* pingFbos;
+    std::vector<Framebuffer>* pongFbos;
 };
 
 void framebufferSizeCallback(GLFWwindow* window, int w, int h);
 
-void resizeAllRenderTargets(std::vector<Framebuffer>& fbos,
-    std::vector<Texture>& prevTextures,
+void resizeAllRenderTargets(std::vector<Framebuffer>& pingFbos,
+    std::vector<Framebuffer>& pongFbos,
     int w, int h);
 
 const char* vertShaderSrc = R"GLSL(
@@ -84,6 +85,16 @@ void main() {
 
 // ConfigureChannelsInteractively is provided by include/ChannelConfig.h
 
+const char* presentFragSrc = R"GLSL(
+#version 330 core
+in vec2 vTex;
+out vec4 fragColor;
+uniform sampler2D uTex;
+void main() {
+    fragColor = texture(uTex, vTex);
+}
+)GLSL";
+
 void framebufferSizeCallback(GLFWwindow* window, int w, int h) {
     g_winWidth = w;
     g_winHeight = h;
@@ -93,28 +104,20 @@ void framebufferSizeCallback(GLFWwindow* window, int w, int h) {
 
     auto* pResources = static_cast<RenderResources*>(glfwGetWindowUserPointer(window));
     if (pResources) {
-        resizeAllRenderTargets(*pResources->fbos, *pResources->prevFrameTextures, w, h);
+        resizeAllRenderTargets(*pResources->pingFbos, *pResources->pongFbos, w, h);
     }
 }
 
 // ConfigureChannelsInteractively implementation moved to include/ChannelConfig.h
 
-void resizeAllRenderTargets(std::vector<Framebuffer>& fbos,
-    std::vector<Texture>& prevTextures,
+void resizeAllRenderTargets(std::vector<Framebuffer>& pingFbos,
+    std::vector<Framebuffer>& pongFbos,
     int w, int h) {
-    for (auto& fbo : fbos) {
+    for (auto& fbo : pingFbos) {
         fbo.create(w, h);
     }
-    for (auto& tex : prevTextures) {
-        glBindTexture(GL_TEXTURE_2D, tex.id);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
-        // Keep buffer sampling linear to match image sampling
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        tex.width = w;
-        tex.height = h;
+    for (auto& fbo : pongFbos) {
+        fbo.create(w, h);
     }
 }
 
@@ -194,21 +197,15 @@ int main() {
     }
     if (programs.empty()) return -1;
 
-    std::vector<Framebuffer> fbos(programs.size());
-    std::vector<Texture> prevFrameTextures(programs.size());
+    GLProgram presentProgram(vertShaderSrc, presentFragSrc);
 
-    for (auto& tex : prevFrameTextures) {
-        glGenTextures(1, &tex.id);
-    }
+    std::vector<Framebuffer> pingFbos(programs.size());
+    std::vector<Framebuffer> pongFbos(programs.size());
 
-    resizeAllRenderTargets(fbos, prevFrameTextures, g_winWidth, g_winHeight);
+    resizeAllRenderTargets(pingFbos, pongFbos, g_winWidth, g_winHeight);
 
-    RenderResources resources{ &fbos, &prevFrameTextures };
+    RenderResources resources{ &pingFbos, &pongFbos };
     glfwSetWindowUserPointer(window, &resources);
-
-    // Draw framebuffer used to efficiently blit FBO results into textures
-    GLuint blitFBO = 0;
-    glGenFramebuffers(1, &blitFBO);
 
     Texture emptyTex;
     emptyTex.createEmpty();
@@ -217,6 +214,7 @@ int main() {
     float lastTimeVal = 0.0f;
     double lastFPSTime = glfwGetTime();
     int frameCount = 0;
+    bool usePingAsPrev = true;
 
     while (!glfwWindowShouldClose(window)) {
         double currentTime = glfwGetTime();
@@ -235,13 +233,37 @@ int main() {
 
         int width = g_winWidth;
         int height = g_winHeight;
+        int frameIndex = g_frame;
+
+        std::time_t nowTime = std::time(nullptr);
+        std::tm localTm{};
+        localtime_s(&localTm, &nowTime);
+        float dateYear = (float)(localTm.tm_year + 1900);
+        float dateMonth = (float)(localTm.tm_mon + 1);
+        float dateDay = (float)localTm.tm_mday;
+        float dateSeconds = (float)(localTm.tm_hour * 3600 + localTm.tm_min * 60 + localTm.tm_sec);
+        float frameRate = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
+        float channelTimes[4] = { t, t, t, t };
+        float sampleRate = 44100.0f;
+
+        auto& prevFbos = usePingAsPrev ? pingFbos : pongFbos;
+        auto& currFbos = usePingAsPrev ? pongFbos : pingFbos;
 
         for (size_t i = 0; i < programs.size(); ++i) {
             programs[i].use();
             glUniform3f(programs[i].getUniformLocation("iResolution"), (float)width, (float)height, 1.0f);
             glUniform1f(programs[i].getUniformLocation("iTime"), t);
             glUniform1f(programs[i].getUniformLocation("iTimeDelta"), dt);
-            glUniform1i(programs[i].getUniformLocation("iFrame"), g_frame++);
+            glUniform1i(programs[i].getUniformLocation("iFrame"), frameIndex);
+
+            GLint frameRateLoc = programs[i].getUniformLocation("iFrameRate");
+            if (frameRateLoc != -1) glUniform1f(frameRateLoc, frameRate);
+            GLint dateLoc = programs[i].getUniformLocation("iDate");
+            if (dateLoc != -1) glUniform4f(dateLoc, dateYear, dateMonth, dateDay, dateSeconds);
+            GLint channelTimeLoc = programs[i].getUniformLocation("iChannelTime[0]");
+            if (channelTimeLoc != -1) glUniform1fv(channelTimeLoc, 4, channelTimes);
+            GLint sampleRateLoc = programs[i].getUniformLocation("iSampleRate");
+            if (sampleRateLoc != -1) glUniform1f(sampleRateLoc, sampleRate);
 
             GLint loc = programs[i].getUniformLocation("iMouse");
             if (loc != -1) {
@@ -279,7 +301,7 @@ int main() {
                     }
                     break;
                 case ChannelInput::BUFFER:
-                    texToBind = &prevFrameTextures[input.bufferIndex];
+                    texToBind = &prevFbos[input.bufferIndex].colorTex;
                     break;
                 }
                 texToBind->bind(c);
@@ -292,18 +314,9 @@ int main() {
                 }
             }
 
-            if (i == programs.size() - 1) {
-                // Final pass renders to default framebuffer; enable sRGB only here
-                Framebuffer::unbind();
-                glViewport(0, 0, width, height);
-                if (sRGBCapable) glEnable(GL_FRAMEBUFFER_SRGB);
-            }
-            else {
-                // Intermediate passes render to linear float FBO; explicitly disable sRGB
-                fbos[i].bind();
-                glViewport(0, 0, width, height);
-                if (sRGBCapable) glDisable(GL_FRAMEBUFFER_SRGB);
-            }
+            currFbos[i].bind();
+            glViewport(0, 0, width, height);
+            if (sRGBCapable) glDisable(GL_FRAMEBUFFER_SRGB);
 
             glClearColor(0, 0, 0, 1);
             glClear(GL_COLOR_BUFFER_BIT);
@@ -312,22 +325,25 @@ int main() {
             VertexArray::unbind();
         }
 
-        // Use framebuffer blit instead of per-texture copy for better performance
-        for (size_t i = 0; i < fbos.size(); ++i) {
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[i].fbo);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blitFBO);
-            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, prevFrameTextures[i].id, 0);
-            glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        }
-        // Reset bindings
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        Framebuffer::unbind();
+        glViewport(0, 0, width, height);
+        if (sRGBCapable) glEnable(GL_FRAMEBUFFER_SRGB);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        presentProgram.use();
+        currFbos.back().colorTex.bind(0);
+        GLint presentTexLoc = presentProgram.getUniformLocation("uTex");
+        if (presentTexLoc != -1) glUniform1i(presentTexLoc, 0);
+        vao.bind();
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        VertexArray::unbind();
+        if (sRGBCapable) glDisable(GL_FRAMEBUFFER_SRGB);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
+        usePingAsPrev = !usePingAsPrev;
+        g_frame++;
     }
 
-    // Release temporary framebuffer
-    if (blitFBO) glDeleteFramebuffers(1, &blitFBO);
     return 0;
 }
