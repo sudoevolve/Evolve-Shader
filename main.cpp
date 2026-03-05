@@ -42,13 +42,13 @@ void cursorPosCallback(GLFWwindow* window, double x, double y) {
 }
 
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    // Shadertoy iMouse 约定：
-    // - iMouse.xy 为当前鼠标位置（从左下角开始，像素坐标）
-    // - iMouse.zw 为按下时的当前位置；未按下时为上次点击位置的负值
+    // Shadertoy iMouse convention:
+    // - iMouse.xy: current mouse position (origin at bottom-left), in pixels
+    // - iMouse.zw: current position when pressed; when not pressed, negative last click position
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
             g_mouseLeftDown = true;
-            // 记录点击时的鼠标位置
+            // Record mouse position on click
             g_lastClickX = g_mouseX;
             g_lastClickY = g_mouseY;
         }
@@ -88,7 +88,7 @@ void framebufferSizeCallback(GLFWwindow* window, int w, int h) {
     g_winWidth = w;
     g_winHeight = h;
     glViewport(0, 0, w, h);
-    // 缩放后重置帧计数，确保自反馈缓冲重新初始化，避免黑屏
+    // Reset frame counter after resize so feedback buffers re-initialize
     g_frame = 0;
 
     auto* pResources = static_cast<RenderResources*>(glfwGetWindowUserPointer(window));
@@ -108,7 +108,7 @@ void resizeAllRenderTargets(std::vector<Framebuffer>& fbos,
     for (auto& tex : prevTextures) {
         glBindTexture(GL_TEXTURE_2D, tex.id);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
-        // 统一缓冲采样为线性，与图片采样保持一致
+        // Keep buffer sampling linear to match image sampling
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -166,7 +166,7 @@ int main() {
 
     std::cout << "OpenGL: " << glGetString(GL_VERSION) << "\n";
     bool sRGBCapable = glfwGetWindowAttrib(window, GLFW_SRGB_CAPABLE);
-    // 不在此处全局启用 sRGB，改为在渲染循环中针对最终屏幕输出按需启用
+    // Do not enable sRGB globally; enable it only for final screen output
 
     VertexArray vao;
     float quad[] = {
@@ -206,7 +206,7 @@ int main() {
     RenderResources resources{ &fbos, &prevFrameTextures };
     glfwSetWindowUserPointer(window, &resources);
 
-    // 用于高效将 FBO 结果复制到纹理的绘制帧缓冲
+    // Draw framebuffer used to efficiently blit FBO results into textures
     GLuint blitFBO = 0;
     glGenFramebuffers(1, &blitFBO);
 
@@ -245,16 +245,16 @@ int main() {
 
             GLint loc = programs[i].getUniformLocation("iMouse");
             if (loc != -1) {
-                // 与 Shadertoy 保持一致的 iMouse 语义
+                // Match Shadertoy iMouse semantics
                 float curX = (float)g_mouseX;
-                float curY = (float)(height - g_mouseY); // 翻转 Y 至左下为原点
+                float curY = (float)(height - g_mouseY); // Flip Y so origin is bottom-left
                 float clickX, clickY;
                 if (g_mouseLeftDown) {
-                    // 鼠标按下：zw 为当前鼠标位置
+                    // Pressed: zw is current mouse position
                     clickX = curX;
                     clickY = curY;
                 } else {
-                    // 鼠标未按下：zw 为上次点击位置的负值
+                    // Not pressed: zw is negative last click position
                     clickX = -(float)g_lastClickX;
                     clickY = -(float)(height - g_lastClickY);
                 }
@@ -293,13 +293,13 @@ int main() {
             }
 
             if (i == programs.size() - 1) {
-                // 最后一帧渲染到默认帧缓冲：只有此时启用 sRGB 写入转换
+                // Final pass renders to default framebuffer; enable sRGB only here
                 Framebuffer::unbind();
                 glViewport(0, 0, width, height);
                 if (sRGBCapable) glEnable(GL_FRAMEBUFFER_SRGB);
             }
             else {
-                // 中间 Pass 渲染到线性浮点 FBO：明确禁用 sRGB，以避免不必要的状态影响
+                // Intermediate passes render to linear float FBO; explicitly disable sRGB
                 fbos[i].bind();
                 glViewport(0, 0, width, height);
                 if (sRGBCapable) glDisable(GL_FRAMEBUFFER_SRGB);
@@ -312,14 +312,14 @@ int main() {
             VertexArray::unbind();
         }
 
-        // 使用帧缓冲 Blit 替换逐纹理 Copy，提高复制性能
+        // Use framebuffer blit instead of per-texture copy for better performance
         for (size_t i = 0; i < fbos.size(); ++i) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[i].fbo);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blitFBO);
             glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, prevFrameTextures[i].id, 0);
             glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
         }
-        // 清理绑定状态
+        // Reset bindings
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
@@ -327,7 +327,7 @@ int main() {
         glfwPollEvents();
     }
 
-    // 释放临时帧缓冲
+    // Release temporary framebuffer
     if (blitFBO) glDeleteFramebuffers(1, &blitFBO);
     return 0;
 }

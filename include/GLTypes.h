@@ -47,7 +47,7 @@ struct Texture {
 
         GLenum format = (nChannels == 3) ? GL_RGB : GL_RGBA;
         glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-        // 统一采样策略：默认线性采样、禁用 mipmap，以与运行时缓冲采样一致
+        // Sampling policy: linear filtering, no mipmaps, consistent with runtime buffers
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
