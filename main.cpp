@@ -96,6 +96,9 @@ void main() {
 )GLSL";
 
 void framebufferSizeCallback(GLFWwindow* window, int w, int h) {
+    // Some platforms can report 0x0 while minimizing; ignore to keep valid render targets.
+    if (w <= 0 || h <= 0) return;
+
     g_winWidth = w;
     g_winHeight = h;
     glViewport(0, 0, w, h);
@@ -113,6 +116,8 @@ void framebufferSizeCallback(GLFWwindow* window, int w, int h) {
 void resizeAllRenderTargets(std::vector<Framebuffer>& pingFbos,
     std::vector<Framebuffer>& pongFbos,
     int w, int h) {
+    if (w <= 0 || h <= 0) return;
+
     for (auto& fbo : pingFbos) {
         fbo.create(w, h);
     }
@@ -193,7 +198,12 @@ int main() {
         std::string code = LoadShaderFile(file);
         if (code.empty()) continue;
         code = WrapShadertoyShader(code);
-        programs.emplace_back(vertShaderSrc, code.c_str());
+        GLProgram prog(vertShaderSrc, code.c_str());
+        if (!prog.id) {
+            std::cerr << "Failed to build shader pass: " << file << "\n";
+            return -1;
+        }
+        programs.emplace_back(std::move(prog));
     }
     if (programs.empty()) return -1;
 
@@ -233,6 +243,10 @@ int main() {
 
         int width = g_winWidth;
         int height = g_winHeight;
+        if (width <= 0 || height <= 0) {
+            glfwPollEvents();
+            continue;
+        }
         int frameIndex = g_frame;
 
         std::time_t nowTime = std::time(nullptr);
@@ -301,7 +315,26 @@ int main() {
                     }
                     break;
                 case ChannelInput::BUFFER:
-                    texToBind = &prevFbos[input.bufferIndex].colorTex;
+                    // Match Shadertoy pass ordering:
+                    // - self feedback always reads previous frame
+                    // - references to already-rendered earlier passes read current frame
+                    // - references to later passes fall back to previous frame
+                    if (input.bufferIndex < 0 || input.bufferIndex >= (int)programs.size()) {
+                        texToBind = &emptyTex;
+                    }
+                    else if (frameIndex == 0) {
+                        // Startup safety: all buffer reads are empty on the very first frame
+                        texToBind = &emptyTex;
+                    }
+                    else if (input.bufferIndex == (int)i) {
+                        texToBind = &prevFbos[input.bufferIndex].colorTex;
+                    }
+                    else if (input.bufferIndex >= 0 && input.bufferIndex < (int)i) {
+                        texToBind = &currFbos[input.bufferIndex].colorTex;
+                    }
+                    else {
+                        texToBind = &prevFbos[input.bufferIndex].colorTex;
+                    }
                     break;
                 }
                 texToBind->bind(c);

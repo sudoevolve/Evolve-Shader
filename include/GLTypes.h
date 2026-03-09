@@ -2,10 +2,14 @@
 #include <glad/glad.h>
 #include <string>
 #include <iostream>
+#include <filesystem>
+#include <cstdio>
 
 // stb_image must be included in one translation unit with STB_IMAGE_IMPLEMENTATION defined.
 // Ensure the .cpp that includes this header defines STB_IMAGE_IMPLEMENTATION before including this header.
 #include "stb_image.h"
+
+namespace fs = std::filesystem;
 
 struct Texture {
     GLuint id = 0;
@@ -35,7 +39,27 @@ struct Texture {
         destroy();
         stbi_set_flip_vertically_on_load(true);
         int nChannels;
-        unsigned char* data = stbi_load(path.c_str(), &width, &height, &nChannels, 0);
+        unsigned char* data = nullptr;
+
+#ifdef _WIN32
+        // Prefer wide-path file open on Windows to support UTF-8 image paths.
+        // Fallback to stbi_load(path.c_str(), ...) for non-UTF8/local-codepage paths.
+        try {
+            fs::path widePath = fs::u8path(path);
+            FILE* fp = nullptr;
+            if (_wfopen_s(&fp, widePath.c_str(), L"rb") == 0 && fp) {
+                data = stbi_load_from_file(fp, &width, &height, &nChannels, 0);
+                fclose(fp);
+            }
+        }
+        catch (...) {
+            data = nullptr;
+        }
+#endif
+
+        if (!data) {
+            data = stbi_load(path.c_str(), &width, &height, &nChannels, 0);
+        }
         if (!data) {
             std::cerr << "Failed to load texture: " << path << std::endl;
             createEmpty();
@@ -50,8 +74,9 @@ struct Texture {
         // Sampling policy: linear filtering, no mipmaps, consistent with runtime buffers
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // Shadertoy image channels are commonly used as tiled inputs.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
         stbi_image_free(data);
         return true;
@@ -139,6 +164,11 @@ public:
     ~Framebuffer() { destroy(); }
 
     bool create(int w, int h) {
+        if (w <= 0 || h <= 0) {
+            std::cerr << "Skip framebuffer create for invalid size (" << w << "x" << h << ")" << std::endl;
+            return false;
+        }
+
         destroy();
         glGenFramebuffers(1, &fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -155,6 +185,13 @@ public:
 
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex.id, 0);
         bool complete = (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+        if (complete) {
+            const GLfloat clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
+            glClearBufferfv(GL_COLOR, 0, clearColor);
+        }
+        else {
+            std::cerr << "Framebuffer incomplete (" << w << "x" << h << ")" << std::endl;
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return complete;
     }

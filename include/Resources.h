@@ -16,6 +16,7 @@ inline Texture* GetTextureForPath(const std::string& path) {
     if (it != g_globalTextureCache.end()) return &it->second;
     Texture tex;
     if (tex.loadFromFile(path)) {
+        std::cout << "Loaded texture: " << path << " (" << tex.width << "x" << tex.height << ")\n";
         auto result = g_globalTextureCache.emplace(path, std::move(tex));
         return &result.first->second;
     }
