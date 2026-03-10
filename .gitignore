@@ -1,0 +1,41 @@
+.vs/
+
+# Visual Studio user files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+
+# Build output directories
+/x64/
+/x86/
+/Debug/
+/Release/
+/Evolve shader/
+/build/
+/out/
+/bin/
+/obj/
+/ipch/
+
+# MSVC intermediate files
+*.obj
+*.iobj
+*.ipdb
+*.idb
+*.ilk
+*.pdb
+*.pch
+*.tlog
+*.lastbuildstate
+*.recipe
+*.log
+*.tmp
+*.cache
+*.FileListAbsolute.txt
+
+# Executables and copied runtime binaries
+*.exe
+*.dll
