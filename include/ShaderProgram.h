@@ -57,7 +57,13 @@ public:
     GLProgram& operator=(const GLProgram&) = delete;
     GLProgram(GLProgram&& other) noexcept : id(other.id), uniformCache(std::move(other.uniformCache)) { other.id = 0; }
     GLProgram& operator=(GLProgram&& other) noexcept {
-        if (this != &other) { destroy(); id = other.id; other.id = 0; uniformCache.clear(); }
+        if (this != &other) {
+            destroy();
+            id = other.id;
+            uniformCache = std::move(other.uniformCache);
+            other.id = 0;
+            other.uniformCache.clear();
+        }
         return *this;
     }
     ~GLProgram() { destroy(); }

@@ -1,11 +1,11 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <regex>
 #include <filesystem>
 #include <sstream>
 #include <fstream>
 #include <algorithm>
+#include <cctype>
 
 namespace fs = std::filesystem;
 
@@ -54,10 +54,21 @@ inline std::vector<std::string> ScanShaderFiles() {
     for (const auto& entry : fs::directory_iterator("frag")) {
         if (entry.is_regular_file() && entry.path().extension() == ".frag") {
             std::string stem = entry.path().stem().string();
-            std::regex numPattern(R"((\d+))");
-            std::smatch match;
-            if (std::regex_search(stem, match, numPattern)) {
-                entries.emplace_back(std::stoi(match[1]), entry.path());
+            size_t numberStart = std::string::npos;
+            for (size_t index = 0; index < stem.size(); ++index) {
+                if (std::isdigit(static_cast<unsigned char>(stem[index])) != 0) {
+                    numberStart = index;
+                    break;
+                }
+            }
+
+            if (numberStart != std::string::npos) {
+                size_t numberEnd = numberStart;
+                while (numberEnd < stem.size() && std::isdigit(static_cast<unsigned char>(stem[numberEnd])) != 0) {
+                    ++numberEnd;
+                }
+
+                entries.emplace_back(std::stoi(stem.substr(numberStart, numberEnd - numberStart)), entry.path());
             }
         }
     }

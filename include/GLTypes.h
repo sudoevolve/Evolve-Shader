@@ -66,17 +66,44 @@ struct Texture {
             return false;
         }
 
+        GLenum internalFormat = GL_RGBA8;
+        GLenum format = GL_RGBA;
+        switch (nChannels) {
+        case 1:
+            internalFormat = GL_R8;
+            format = GL_RED;
+            break;
+        case 2:
+            internalFormat = GL_RG8;
+            format = GL_RG;
+            break;
+        case 3:
+            internalFormat = GL_RGB8;
+            format = GL_RGB;
+            break;
+        case 4:
+            internalFormat = GL_RGBA8;
+            format = GL_RGBA;
+            break;
+        default:
+            std::cerr << "Unsupported channel count for texture: " << path << " (" << nChannels << ")" << std::endl;
+            stbi_image_free(data);
+            createEmpty();
+            return false;
+        }
+
         glGenTextures(1, &id);
         glBindTexture(GL_TEXTURE_2D, id);
 
-        GLenum format = (nChannels == 3) ? GL_RGB : GL_RGBA;
-        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, GL_UNSIGNED_BYTE, data);
         // Sampling policy: linear filtering, no mipmaps, consistent with runtime buffers
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         // Shadertoy image channels are commonly used as tiled inputs.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
         stbi_image_free(data);
         return true;

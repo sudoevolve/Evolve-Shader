@@ -1,17 +1,17 @@
 // main.cpp - Multi-pass Shader Renderer with Full RAII and Cross-Pass iChannel Support
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
+#include <cstdlib>
 #include <ctime>
-#include <regex>
-#include <algorithm>
-#include <set>
 #include <filesystem>
-#include <map>
+#include <iostream>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
@@ -22,53 +22,80 @@
 
 namespace fs = std::filesystem;
 
-#include "include/GLTypes.h"        // Texture, VertexBuffer, VertexArray, Framebuffer (requires STB_IMAGE_IMPLEMENTATION)
-#include "include/ShaderProgram.h"  // CompileShader, CreateProgram, GLProgram
-#include "include/ShaderIO.h"       // LoadShaderFile, ScanShaderFiles, WrapShadertoyShader
-#include "include/Resources.h"      // g_globalTextureCache, GetTextureForPath, ScanGlobalImages
-#include "include/ChannelConfig.h"  // ChannelInput, ConfigureChannelsInteractively
+#include "include/GLTypes.h"
+#include "include/ShaderProgram.h"
+#include "include/ShaderIO.h"
+#include "include/Resources.h"
+#include "include/ChannelConfig.h"
 
+namespace {
 
-double g_mouseX = 0.0, g_mouseY = 0.0;
-double g_lastClickX = 0.0, g_lastClickY = 0.0;
-bool g_mouseLeftDown = false;
-int g_winWidth = 960, g_winHeight = 540;
-int g_frame = 0;
+constexpr int kChannelCount = 4;
+constexpr int kInitialWindowWidth = 960;
+constexpr int kInitialWindowHeight = 540;
 
-std::chrono::steady_clock::time_point g_start;
-
-void cursorPosCallback(GLFWwindow* window, double x, double y) {
-    g_mouseX = x;
-    g_mouseY = y;
-}
-
-void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    // Shadertoy iMouse convention:
-    // - iMouse.xy: current mouse position (origin at bottom-left), in pixels
-    // - iMouse.zw: current position when pressed; when not pressed, negative last click position
-    if (button == GLFW_MOUSE_BUTTON_LEFT) {
-        if (action == GLFW_PRESS) {
-            g_mouseLeftDown = true;
-            // Record mouse position on click
-            g_lastClickX = g_mouseX;
-            g_lastClickY = g_mouseY;
-        }
-        else if (action == GLFW_RELEASE) {
-            g_mouseLeftDown = false;
-        }
-    }
-}
-
-struct RenderResources {
-    std::vector<Framebuffer>* pingFbos;
-    std::vector<Framebuffer>* pongFbos;
+struct InputState {
+    double mouseX = 0.0;
+    double mouseY = 0.0;
+    double lastClickX = 0.0;
+    double lastClickY = 0.0;
+    bool mouseLeftDown = false;
 };
 
-void framebufferSizeCallback(GLFWwindow* window, int w, int h);
+struct AppContext {
+    InputState input;
+    int winWidth = kInitialWindowWidth;
+    int winHeight = kInitialWindowHeight;
+    int frame = 0;
+    std::chrono::steady_clock::time_point start;
+    std::vector<Framebuffer>* pingFbos = nullptr;
+    std::vector<Framebuffer>* pongFbos = nullptr;
+};
 
-void resizeAllRenderTargets(std::vector<Framebuffer>& pingFbos,
-    std::vector<Framebuffer>& pongFbos,
-    int w, int h);
+struct ProgramUniforms {
+    GLint iResolution = -1;
+    GLint iTime = -1;
+    GLint iTimeDelta = -1;
+    GLint iFrame = -1;
+    GLint iFrameRate = -1;
+    GLint iDate = -1;
+    GLint iMouse = -1;
+    GLint iChannelTime0 = -1;
+    GLint iSampleRate = -1;
+    std::array<GLint, kChannelCount> iChannel{ -1, -1, -1, -1 };
+    std::array<GLint, kChannelCount> iChannelResolution{ -1, -1, -1, -1 };
+};
+
+struct ShaderPass {
+    GLProgram program;
+    ProgramUniforms uniforms;
+};
+
+struct PresentPass {
+    GLProgram program;
+    GLint textureLocation = -1;
+};
+
+struct FrameUniformData {
+    int width = 0;
+    int height = 0;
+    int frameIndex = 0;
+    float time = 0.0f;
+    float deltaTime = 0.0f;
+    float frameRate = 0.0f;
+    float sampleRate = 44100.0f;
+    std::array<float, 4> date{ 0.0f, 0.0f, 0.0f, 0.0f };
+    std::array<float, 4> mouse{ 0.0f, 0.0f, 0.0f, 0.0f };
+    std::array<float, kChannelCount> channelTimes{ 0.0f, 0.0f, 0.0f, 0.0f };
+};
+
+struct ChannelBinding {
+    ChannelInput::Type type = ChannelInput::NONE;
+    int bufferIndex = -1;
+    const Texture* globalTexture = nullptr;
+};
+
+using PassChannelBindings = std::array<ChannelBinding, kChannelCount>;
 
 const char* vertShaderSrc = R"GLSL(
 #version 330 core
@@ -81,10 +108,6 @@ void main() {
 }
 )GLSL";
 
-// ScanShaderFiles is now provided by include/ShaderIO.h
-
-// ConfigureChannelsInteractively is provided by include/ChannelConfig.h
-
 const char* presentFragSrc = R"GLSL(
 #version 330 core
 in vec2 vTex;
@@ -95,89 +118,436 @@ void main() {
 }
 )GLSL";
 
-void framebufferSizeCallback(GLFWwindow* window, int w, int h) {
-    // Some platforms can report 0x0 while minimizing; ignore to keep valid render targets.
-    if (w <= 0 || h <= 0) return;
+struct GlfwSession {
+    bool initialized = false;
 
-    g_winWidth = w;
-    g_winHeight = h;
-    glViewport(0, 0, w, h);
-    // Reset frame counter after resize so feedback buffers re-initialize
-    g_frame = 0;
-
-    auto* pResources = static_cast<RenderResources*>(glfwGetWindowUserPointer(window));
-    if (pResources) {
-        resizeAllRenderTargets(*pResources->pingFbos, *pResources->pongFbos, w, h);
-    }
-}
-
-// ConfigureChannelsInteractively implementation moved to include/ChannelConfig.h
-
-void resizeAllRenderTargets(std::vector<Framebuffer>& pingFbos,
-    std::vector<Framebuffer>& pongFbos,
-    int w, int h) {
-    if (w <= 0 || h <= 0) return;
-
-    for (auto& fbo : pingFbos) {
-        fbo.create(w, h);
-    }
-    for (auto& fbo : pongFbos) {
-        fbo.create(w, h);
-    }
-}
-
-int main() {
-    auto g_globalImages = ScanGlobalImages();
-    if (!g_globalImages.empty()) {
-        std::cout << "\nFound " << g_globalImages.size() << " global image(s):\n";
-        for (size_t i = 0; i < g_globalImages.size(); ++i) {
-            std::cout << "  [" << i + 1 << "] " << g_globalImages[i].filename().string()
-                << " (" << g_globalImages[i].parent_path().filename().string() << ")\n";
+    GlfwSession() : initialized(glfwInit() == GLFW_TRUE) {}
+    ~GlfwSession() {
+        if (initialized) {
+            glfwTerminate();
         }
     }
 
+    explicit operator bool() const {
+        return initialized;
+    }
+};
+
+struct GLFWWindowDeleter {
+    void operator()(GLFWwindow* window) const {
+        if (window) {
+            glfwDestroyWindow(window);
+        }
+    }
+};
+
+using WindowHandle = std::unique_ptr<GLFWwindow, GLFWWindowDeleter>;
+
+AppContext* GetAppContext(GLFWwindow* window) {
+    return static_cast<AppContext*>(glfwGetWindowUserPointer(window));
+}
+
+std::string ToLower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+bool ReadBoolFromEnv(const char* envVarName, bool fallbackValue) {
+    std::string value;
+
+#ifdef _WIN32
+    char* rawValue = nullptr;
+    size_t valueLength = 0;
+    if (_dupenv_s(&rawValue, &valueLength, envVarName) != 0 || !rawValue) {
+        return fallbackValue;
+    }
+
+    value = ToLower(rawValue);
+    free(rawValue);
+#else
+    const char* rawValue = std::getenv(envVarName);
+    if (!rawValue) {
+        return fallbackValue;
+    }
+
+    value = ToLower(rawValue);
+#endif
+
+    if (value == "1" || value == "true" || value == "yes" || value == "on") {
+        return true;
+    }
+    if (value == "0" || value == "false" || value == "no" || value == "off") {
+        return false;
+    }
+    return fallbackValue;
+}
+
+void cursorPosCallback(GLFWwindow* window, double x, double y) {
+    if (auto* app = GetAppContext(window)) {
+        app->input.mouseX = x;
+        app->input.mouseY = y;
+    }
+}
+
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    (void)mods;
+
+    if (button != GLFW_MOUSE_BUTTON_LEFT) {
+        return;
+    }
+
+    if (auto* app = GetAppContext(window)) {
+        if (action == GLFW_PRESS) {
+            app->input.mouseLeftDown = true;
+            app->input.lastClickX = app->input.mouseX;
+            app->input.lastClickY = app->input.mouseY;
+        }
+        else if (action == GLFW_RELEASE) {
+            app->input.mouseLeftDown = false;
+        }
+    }
+}
+
+void resizeAllRenderTargets(std::vector<Framebuffer>& pingFbos,
+    std::vector<Framebuffer>& pongFbos,
+    int width,
+    int height) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    for (auto& fbo : pingFbos) {
+        fbo.create(width, height);
+    }
+    for (auto& fbo : pongFbos) {
+        fbo.create(width, height);
+    }
+}
+
+void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (auto* app = GetAppContext(window)) {
+        app->winWidth = width;
+        app->winHeight = height;
+        app->frame = 0;
+
+        if (app->pingFbos && app->pongFbos) {
+            resizeAllRenderTargets(*app->pingFbos, *app->pongFbos, width, height);
+        }
+    }
+
+    glViewport(0, 0, width, height);
+}
+
+void PrintGlobalImages(const std::vector<fs::path>& globalImages) {
+    if (globalImages.empty()) {
+        return;
+    }
+
+    std::cout << "\nFound " << globalImages.size() << " global image(s):\n";
+    for (size_t index = 0; index < globalImages.size(); ++index) {
+        std::cout << "  [" << index + 1 << "] "
+            << globalImages[index].filename().string()
+            << " (" << globalImages[index].parent_path().filename().string() << ")\n";
+    }
+}
+
+bool ValidateShaderDirectory() {
     if (!fs::exists("frag") || !fs::is_directory("frag")) {
         std::cerr << "Error: 'frag' folder not found!\n";
-        return -1;
+        return false;
     }
-    auto fragFiles = ScanShaderFiles();
-    if (fragFiles.empty()) {
-        std::cerr << "No .frag files found!\n";
-        return -1;
-    }
+    return true;
+}
+
+void PrintShaderFiles(const std::vector<std::string>& fragFiles) {
     std::cout << "\nFound " << fragFiles.size() << " shader(s):\n";
-    for (size_t i = 0; i < fragFiles.size(); ++i) {
-        std::cout << "  [" << i + 1 << "] " << fs::path(fragFiles[i]).filename().string() << "\n";
+    for (size_t index = 0; index < fragFiles.size(); ++index) {
+        std::cout << "  [" << index + 1 << "] " << fs::path(fragFiles[index]).filename().string() << "\n";
+    }
+}
+
+ProgramUniforms CacheProgramUniforms(const GLProgram& program) {
+    ProgramUniforms uniforms;
+    uniforms.iResolution = program.getUniformLocation("iResolution");
+    uniforms.iTime = program.getUniformLocation("iTime");
+    uniforms.iTimeDelta = program.getUniformLocation("iTimeDelta");
+    uniforms.iFrame = program.getUniformLocation("iFrame");
+    uniforms.iFrameRate = program.getUniformLocation("iFrameRate");
+    uniforms.iDate = program.getUniformLocation("iDate");
+    uniforms.iMouse = program.getUniformLocation("iMouse");
+    uniforms.iChannelTime0 = program.getUniformLocation("iChannelTime[0]");
+    uniforms.iSampleRate = program.getUniformLocation("iSampleRate");
+
+    for (int channel = 0; channel < kChannelCount; ++channel) {
+        uniforms.iChannel[channel] = program.getUniformLocation("iChannel" + std::to_string(channel));
+        uniforms.iChannelResolution[channel] = program.getUniformLocation("iChannelResolution[" + std::to_string(channel) + "]");
     }
 
-    auto channelConfig = ConfigureChannelsInteractively(fragFiles, g_globalImages);
+    return uniforms;
+}
 
-    if (!glfwInit()) return -1;
+std::vector<ShaderPass> BuildShaderPasses(const std::vector<std::string>& fragFiles) {
+    std::vector<ShaderPass> passes;
+    passes.reserve(fragFiles.size());
+
+    for (const auto& file : fragFiles) {
+        std::string code = LoadShaderFile(file);
+        if (code.empty()) {
+            std::cerr << "Failed to load shader pass: " << file << "\n";
+            return {};
+        }
+
+        const std::string wrappedCode = WrapShadertoyShader(code);
+
+        ShaderPass pass;
+        pass.program = GLProgram(vertShaderSrc, wrappedCode.c_str());
+        if (!pass.program.id) {
+            std::cerr << "Failed to build shader pass: " << file << "\n";
+            return {};
+        }
+
+        pass.uniforms = CacheProgramUniforms(pass.program);
+        passes.emplace_back(std::move(pass));
+    }
+
+    return passes;
+}
+
+PresentPass BuildPresentPass() {
+    PresentPass pass;
+    pass.program = GLProgram(vertShaderSrc, presentFragSrc);
+    if (pass.program.id) {
+        pass.textureLocation = pass.program.getUniformLocation("uTex");
+    }
+    return pass;
+}
+
+WindowHandle CreateWindow(AppContext& app, bool vsyncEnabled) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
 
-    GLFWwindow* window = glfwCreateWindow(g_winWidth, g_winHeight, "Evolve Shader", nullptr, nullptr);
-    if (!window) { glfwTerminate(); return -1; }
-    glfwMakeContextCurrent(window);
-    glfwSetCursorPosCallback(window, cursorPosCallback);
-    glfwSetMouseButtonCallback(window, mouseButtonCallback);
-    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
-    glfwSwapInterval(0);
+    GLFWwindow* rawWindow = glfwCreateWindow(app.winWidth, app.winHeight, "Evolve Shader", nullptr, nullptr);
+    if (!rawWindow) {
+        return WindowHandle{};
+    }
 
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-        glfwDestroyWindow(window);
-        glfwTerminate();
+    glfwMakeContextCurrent(rawWindow);
+    glfwSetWindowUserPointer(rawWindow, &app);
+    glfwSetCursorPosCallback(rawWindow, cursorPosCallback);
+    glfwSetMouseButtonCallback(rawWindow, mouseButtonCallback);
+    glfwSetFramebufferSizeCallback(rawWindow, framebufferSizeCallback);
+    glfwSwapInterval(vsyncEnabled ? 1 : 0);
+
+    return WindowHandle(rawWindow);
+}
+
+FrameUniformData BuildFrameUniformData(const AppContext& app, float timeSeconds, float deltaTimeSeconds) {
+    FrameUniformData data;
+    data.width = app.winWidth;
+    data.height = app.winHeight;
+    data.frameIndex = app.frame;
+    data.time = timeSeconds;
+    data.deltaTime = deltaTimeSeconds;
+    data.frameRate = (deltaTimeSeconds > 0.0f) ? (1.0f / deltaTimeSeconds) : 0.0f;
+    data.channelTimes = { timeSeconds, timeSeconds, timeSeconds, timeSeconds };
+
+    std::time_t nowTime = std::time(nullptr);
+    std::tm localTm{};
+#ifdef _WIN32
+    localtime_s(&localTm, &nowTime);
+#else
+    localtime_r(&nowTime, &localTm);
+#endif
+    data.date = {
+        static_cast<float>(localTm.tm_year + 1900),
+        static_cast<float>(localTm.tm_mon + 1),
+        static_cast<float>(localTm.tm_mday),
+        static_cast<float>(localTm.tm_hour * 3600 + localTm.tm_min * 60 + localTm.tm_sec)
+    };
+
+    const float curX = static_cast<float>(app.input.mouseX);
+    const float curY = static_cast<float>(app.winHeight - app.input.mouseY);
+    if (app.input.mouseLeftDown) {
+        data.mouse = { curX, curY, curX, curY };
+    }
+    else {
+        data.mouse = {
+            curX,
+            curY,
+            -static_cast<float>(app.input.lastClickX),
+            -static_cast<float>(app.winHeight - app.input.lastClickY)
+        };
+    }
+
+    return data;
+}
+
+void ApplyCommonUniforms(const ProgramUniforms& uniforms, const FrameUniformData& frameData) {
+    if (uniforms.iResolution != -1) {
+        glUniform3f(uniforms.iResolution, static_cast<float>(frameData.width), static_cast<float>(frameData.height), 1.0f);
+    }
+    if (uniforms.iTime != -1) {
+        glUniform1f(uniforms.iTime, frameData.time);
+    }
+    if (uniforms.iTimeDelta != -1) {
+        glUniform1f(uniforms.iTimeDelta, frameData.deltaTime);
+    }
+    if (uniforms.iFrame != -1) {
+        glUniform1i(uniforms.iFrame, frameData.frameIndex);
+    }
+    if (uniforms.iFrameRate != -1) {
+        glUniform1f(uniforms.iFrameRate, frameData.frameRate);
+    }
+    if (uniforms.iDate != -1) {
+        glUniform4f(uniforms.iDate, frameData.date[0], frameData.date[1], frameData.date[2], frameData.date[3]);
+    }
+    if (uniforms.iMouse != -1) {
+        glUniform4f(uniforms.iMouse, frameData.mouse[0], frameData.mouse[1], frameData.mouse[2], frameData.mouse[3]);
+    }
+    if (uniforms.iChannelTime0 != -1) {
+        glUniform1fv(uniforms.iChannelTime0, kChannelCount, frameData.channelTimes.data());
+    }
+    if (uniforms.iSampleRate != -1) {
+        glUniform1f(uniforms.iSampleRate, frameData.sampleRate);
+    }
+}
+
+std::vector<PassChannelBindings> BuildChannelBindings(
+    const std::vector<std::array<ChannelInput, kChannelCount>>& channelConfig,
+    const std::vector<fs::path>& globalImages) {
+
+    std::vector<PassChannelBindings> bindings(channelConfig.size());
+    std::set<std::string> preloadedPaths;
+
+    for (size_t passIndex = 0; passIndex < channelConfig.size(); ++passIndex) {
+        for (int channel = 0; channel < kChannelCount; ++channel) {
+            const ChannelInput& input = channelConfig[passIndex][channel];
+            ChannelBinding binding;
+            binding.type = input.type;
+            binding.bufferIndex = input.bufferIndex;
+
+            if (input.type == ChannelInput::IMAGE_GLOBAL) {
+                if (input.imageIndex >= 0 && input.imageIndex < static_cast<int>(globalImages.size())) {
+                    const std::string imagePath = globalImages[input.imageIndex].string();
+                    binding.globalTexture = GetTextureForPath(imagePath);
+                    preloadedPaths.insert(imagePath);
+                }
+                else {
+                    binding.type = ChannelInput::NONE;
+                }
+            }
+
+            bindings[passIndex][channel] = binding;
+        }
+    }
+
+    if (!preloadedPaths.empty()) {
+        std::cout << "Preloaded " << preloadedPaths.size() << " configured global image(s).\n";
+    }
+
+    return bindings;
+}
+
+const Texture* ResolveChannelTexture(const ChannelBinding& binding,
+    size_t passIndex,
+    int frameIndex,
+    const std::vector<Framebuffer>& prevFbos,
+    const std::vector<Framebuffer>& currFbos,
+    Texture& emptyTex) {
+
+    switch (binding.type) {
+    case ChannelInput::NONE:
+        return &emptyTex;
+    case ChannelInput::IMAGE_GLOBAL:
+        return binding.globalTexture ? binding.globalTexture : &emptyTex;
+    case ChannelInput::BUFFER:
+        if (binding.bufferIndex < 0 || binding.bufferIndex >= static_cast<int>(prevFbos.size())) {
+            return &emptyTex;
+        }
+        if (frameIndex == 0) {
+            return &emptyTex;
+        }
+        if (binding.bufferIndex == static_cast<int>(passIndex)) {
+            return &prevFbos[binding.bufferIndex].colorTex;
+        }
+        if (binding.bufferIndex < static_cast<int>(passIndex)) {
+            return &currFbos[binding.bufferIndex].colorTex;
+        }
+        return &prevFbos[binding.bufferIndex].colorTex;
+    }
+
+    return &emptyTex;
+}
+
+void UpdateWindowTitle(GLFWwindow* window, double currentTime, double& lastFpsTime, int& frameCount) {
+    ++frameCount;
+    if (currentTime - lastFpsTime < 1.0) {
+        return;
+    }
+
+    const std::string title = "Evolve Shader - FPS: " + std::to_string(frameCount);
+    glfwSetWindowTitle(window, title.c_str());
+    frameCount = 0;
+    lastFpsTime = currentTime;
+}
+
+} // namespace
+
+int main() {
+    const std::vector<fs::path> globalImages = ScanGlobalImages();
+    PrintGlobalImages(globalImages);
+    if (!ValidateShaderDirectory()) {
         return -1;
     }
 
+    const std::vector<std::string> fragFiles = ScanShaderFiles();
+    if (fragFiles.empty()) {
+        std::cerr << "No .frag files found!\n";
+        return -1;
+    }
+    PrintShaderFiles(fragFiles);
+
+    const auto channelConfig = ConfigureChannelsInteractively(fragFiles, globalImages);
+
+    GlfwSession glfwSession;
+    if (!glfwSession) {
+        return -1;
+    }
+
+    AppContext app;
+    const bool vsyncEnabled = ReadBoolFromEnv("EVOLVE_SHADER_VSYNC", true);
+    WindowHandle window = CreateWindow(app, vsyncEnabled);
+    if (!window) {
+        return -1;
+    }
+
+    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
+        return -1;
+    }
+
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetFramebufferSize(window.get(), &framebufferWidth, &framebufferHeight);
+    if (framebufferWidth > 0 && framebufferHeight > 0) {
+        app.winWidth = framebufferWidth;
+        app.winHeight = framebufferHeight;
+    }
+    glViewport(0, 0, app.winWidth, app.winHeight);
+
     std::cout << "OpenGL: " << glGetString(GL_VERSION) << "\n";
-    bool sRGBCapable = glfwGetWindowAttrib(window, GLFW_SRGB_CAPABLE);
-    // Do not enable sRGB globally; enable it only for final screen output
+    std::cout << "VSync: " << (vsyncEnabled ? "on" : "off") << " (override with EVOLVE_SHADER_VSYNC=0/1)\n";
+
+    const bool sRGBCapable = glfwGetWindowAttrib(window.get(), GLFW_SRGB_CAPABLE) == GLFW_TRUE;
 
     VertexArray vao;
-    float quad[] = {
+    constexpr std::array<float, 24> quadVertices = {
         -1.f, -1.f, 0.f, 0.f,
          1.f, -1.f, 1.f, 0.f,
          1.f,  1.f, 1.f, 1.f,
@@ -185,173 +555,96 @@ int main() {
          1.f,  1.f, 1.f, 1.f,
         -1.f,  1.f, 0.f, 1.f
     };
-    VertexBuffer vbo(quad, sizeof(quad));
-    vao.bind(); vbo.bind();
+    VertexBuffer vbo(quadVertices.data(), sizeof(quadVertices));
+    vao.bind();
+    vbo.bind();
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(0));
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(2 * sizeof(float)));
     VertexArray::unbind();
 
-    std::vector<GLProgram> programs;
-    for (const auto& file : fragFiles) {
-        std::string code = LoadShaderFile(file);
-        if (code.empty()) continue;
-        code = WrapShadertoyShader(code);
-        GLProgram prog(vertShaderSrc, code.c_str());
-        if (!prog.id) {
-            std::cerr << "Failed to build shader pass: " << file << "\n";
-            return -1;
-        }
-        programs.emplace_back(std::move(prog));
+    std::vector<ShaderPass> passes = BuildShaderPasses(fragFiles);
+    if (passes.empty()) {
+        return -1;
     }
-    if (programs.empty()) return -1;
 
-    GLProgram presentProgram(vertShaderSrc, presentFragSrc);
+    PresentPass presentPass = BuildPresentPass();
+    if (!presentPass.program.id) {
+        return -1;
+    }
 
-    std::vector<Framebuffer> pingFbos(programs.size());
-    std::vector<Framebuffer> pongFbos(programs.size());
+    std::vector<Framebuffer> pingFbos(passes.size());
+    std::vector<Framebuffer> pongFbos(passes.size());
+    app.pingFbos = &pingFbos;
+    app.pongFbos = &pongFbos;
+    resizeAllRenderTargets(pingFbos, pongFbos, app.winWidth, app.winHeight);
 
-    resizeAllRenderTargets(pingFbos, pongFbos, g_winWidth, g_winHeight);
-
-    RenderResources resources{ &pingFbos, &pongFbos };
-    glfwSetWindowUserPointer(window, &resources);
+    const std::vector<PassChannelBindings> channelBindings = BuildChannelBindings(channelConfig, globalImages);
 
     Texture emptyTex;
     emptyTex.createEmpty();
 
-    g_start = std::chrono::steady_clock::now();
-    float lastTimeVal = 0.0f;
-    double lastFPSTime = glfwGetTime();
+    app.start = std::chrono::steady_clock::now();
+    float lastTimeSeconds = 0.0f;
+    double lastFpsTime = glfwGetTime();
     int frameCount = 0;
     bool usePingAsPrev = true;
 
-    while (!glfwWindowShouldClose(window)) {
-        double currentTime = glfwGetTime();
-        frameCount++;
-        if (currentTime - lastFPSTime >= 1.0) {
-            std::string title = "Evolve Shader - FPS: " + std::to_string(frameCount);
-            glfwSetWindowTitle(window, title.c_str());
-            frameCount = 0;
-            lastFPSTime = currentTime;
-        }
+    while (!glfwWindowShouldClose(window.get())) {
+        const double currentTime = glfwGetTime();
+        UpdateWindowTitle(window.get(), currentTime, lastFpsTime, frameCount);
 
-        auto now = std::chrono::steady_clock::now();
-        float t = std::chrono::duration<float>(now - g_start).count();
-        float dt = t - lastTimeVal;
-        lastTimeVal = t;
+        const auto now = std::chrono::steady_clock::now();
+        const float timeSeconds = std::chrono::duration<float>(now - app.start).count();
+        const float deltaTimeSeconds = timeSeconds - lastTimeSeconds;
+        lastTimeSeconds = timeSeconds;
 
-        int width = g_winWidth;
-        int height = g_winHeight;
-        if (width <= 0 || height <= 0) {
+        if (app.winWidth <= 0 || app.winHeight <= 0) {
             glfwPollEvents();
             continue;
         }
-        int frameIndex = g_frame;
 
-        std::time_t nowTime = std::time(nullptr);
-        std::tm localTm{};
-        localtime_s(&localTm, &nowTime);
-        float dateYear = (float)(localTm.tm_year + 1900);
-        float dateMonth = (float)(localTm.tm_mon + 1);
-        float dateDay = (float)localTm.tm_mday;
-        float dateSeconds = (float)(localTm.tm_hour * 3600 + localTm.tm_min * 60 + localTm.tm_sec);
-        float frameRate = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
-        float channelTimes[4] = { t, t, t, t };
-        float sampleRate = 44100.0f;
+        const FrameUniformData frameData = BuildFrameUniformData(app, timeSeconds, deltaTimeSeconds);
 
         auto& prevFbos = usePingAsPrev ? pingFbos : pongFbos;
         auto& currFbos = usePingAsPrev ? pongFbos : pingFbos;
 
-        for (size_t i = 0; i < programs.size(); ++i) {
-            programs[i].use();
-            glUniform3f(programs[i].getUniformLocation("iResolution"), (float)width, (float)height, 1.0f);
-            glUniform1f(programs[i].getUniformLocation("iTime"), t);
-            glUniform1f(programs[i].getUniformLocation("iTimeDelta"), dt);
-            glUniform1i(programs[i].getUniformLocation("iFrame"), frameIndex);
+        for (size_t passIndex = 0; passIndex < passes.size(); ++passIndex) {
+            ShaderPass& pass = passes[passIndex];
+            pass.program.use();
+            ApplyCommonUniforms(pass.uniforms, frameData);
 
-            GLint frameRateLoc = programs[i].getUniformLocation("iFrameRate");
-            if (frameRateLoc != -1) glUniform1f(frameRateLoc, frameRate);
-            GLint dateLoc = programs[i].getUniformLocation("iDate");
-            if (dateLoc != -1) glUniform4f(dateLoc, dateYear, dateMonth, dateDay, dateSeconds);
-            GLint channelTimeLoc = programs[i].getUniformLocation("iChannelTime[0]");
-            if (channelTimeLoc != -1) glUniform1fv(channelTimeLoc, 4, channelTimes);
-            GLint sampleRateLoc = programs[i].getUniformLocation("iSampleRate");
-            if (sampleRateLoc != -1) glUniform1f(sampleRateLoc, sampleRate);
-
-            GLint loc = programs[i].getUniformLocation("iMouse");
-            if (loc != -1) {
-                // Match Shadertoy iMouse semantics
-                float curX = (float)g_mouseX;
-                float curY = (float)(height - g_mouseY); // Flip Y so origin is bottom-left
-                float clickX, clickY;
-                if (g_mouseLeftDown) {
-                    // Pressed: zw is current mouse position
-                    clickX = curX;
-                    clickY = curY;
-                } else {
-                    // Not pressed: zw is negative last click position
-                    clickX = -(float)g_lastClickX;
-                    clickY = -(float)(height - g_lastClickY);
+            for (int channel = 0; channel < kChannelCount; ++channel) {
+                if (pass.uniforms.iChannel[channel] == -1) {
+                    continue;
                 }
-                glUniform4f(loc, curX, curY, clickX, clickY);
-            }
 
-            auto& configForThis = channelConfig[i];
-            for (int c = 0; c < 4; ++c) {
-                const ChannelInput& input = configForThis[c];
-                std::string name = "iChannel" + std::to_string(c);
-                GLint loc = programs[i].getUniformLocation(name);
-                if (loc == -1) continue;
+                const Texture* boundTexture = ResolveChannelTexture(
+                    channelBindings[passIndex][channel],
+                    passIndex,
+                    frameData.frameIndex,
+                    prevFbos,
+                    currFbos,
+                    emptyTex);
 
-                Texture* texToBind = &emptyTex;
-                switch (input.type) {
-                case ChannelInput::NONE:
-                    break;
-                case ChannelInput::IMAGE_GLOBAL:
-                    if (input.imageIndex >= 0 && input.imageIndex < (int)g_globalImages.size()) {
-                        std::string imgPath = g_globalImages[input.imageIndex].string();
-                        texToBind = GetTextureForPath(imgPath);
-                    }
-                    break;
-                case ChannelInput::BUFFER:
-                    // Match Shadertoy pass ordering:
-                    // - self feedback always reads previous frame
-                    // - references to already-rendered earlier passes read current frame
-                    // - references to later passes fall back to previous frame
-                    if (input.bufferIndex < 0 || input.bufferIndex >= (int)programs.size()) {
-                        texToBind = &emptyTex;
-                    }
-                    else if (frameIndex == 0) {
-                        // Startup safety: all buffer reads are empty on the very first frame
-                        texToBind = &emptyTex;
-                    }
-                    else if (input.bufferIndex == (int)i) {
-                        texToBind = &prevFbos[input.bufferIndex].colorTex;
-                    }
-                    else if (input.bufferIndex >= 0 && input.bufferIndex < (int)i) {
-                        texToBind = &currFbos[input.bufferIndex].colorTex;
-                    }
-                    else {
-                        texToBind = &prevFbos[input.bufferIndex].colorTex;
-                    }
-                    break;
-                }
-                texToBind->bind(c);
-                glUniform1i(loc, c);
+                boundTexture->bind(channel);
+                glUniform1i(pass.uniforms.iChannel[channel], channel);
 
-                std::string resName = "iChannelResolution[" + std::to_string(c) + "]";
-                GLint resLoc = programs[i].getUniformLocation(resName);
-                if (resLoc != -1) {
-                    glUniform3f(resLoc, (float)texToBind->width, (float)texToBind->height, 1.0f);
+                if (pass.uniforms.iChannelResolution[channel] != -1) {
+                    glUniform3f(pass.uniforms.iChannelResolution[channel],
+                        static_cast<float>(boundTexture->width),
+                        static_cast<float>(boundTexture->height),
+                        1.0f);
                 }
             }
 
-            currFbos[i].bind();
-            glViewport(0, 0, width, height);
-            if (sRGBCapable) glDisable(GL_FRAMEBUFFER_SRGB);
-
-            glClearColor(0, 0, 0, 1);
+            currFbos[passIndex].bind();
+            glViewport(0, 0, frameData.width, frameData.height);
+            if (sRGBCapable) {
+                glDisable(GL_FRAMEBUFFER_SRGB);
+            }
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             vao.bind();
             glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -359,23 +652,28 @@ int main() {
         }
 
         Framebuffer::unbind();
-        glViewport(0, 0, width, height);
-        if (sRGBCapable) glEnable(GL_FRAMEBUFFER_SRGB);
-        glClearColor(0, 0, 0, 1);
+        glViewport(0, 0, frameData.width, frameData.height);
+        if (sRGBCapable) {
+            glEnable(GL_FRAMEBUFFER_SRGB);
+        }
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        presentProgram.use();
+        presentPass.program.use();
         currFbos.back().colorTex.bind(0);
-        GLint presentTexLoc = presentProgram.getUniformLocation("uTex");
-        if (presentTexLoc != -1) glUniform1i(presentTexLoc, 0);
+        if (presentPass.textureLocation != -1) {
+            glUniform1i(presentPass.textureLocation, 0);
+        }
         vao.bind();
         glDrawArrays(GL_TRIANGLES, 0, 6);
         VertexArray::unbind();
-        if (sRGBCapable) glDisable(GL_FRAMEBUFFER_SRGB);
+        if (sRGBCapable) {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+        }
 
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(window.get());
         glfwPollEvents();
         usePingAsPrev = !usePingAsPrev;
-        g_frame++;
+        ++app.frame;
     }
 
     return 0;
