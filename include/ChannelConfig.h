@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <sstream>
 #include <map>
+#include <algorithm>
+#include <cctype>
 
 namespace fs = std::filesystem;
 
@@ -14,6 +16,27 @@ struct ChannelInput {
     int bufferIndex = -1;
     int imageIndex = -1;
 };
+
+inline bool ConfigureVsyncSetting(bool currentValue) {
+    std::cout << "\n=== Settings ===\n";
+    std::cout << " VSync (swap interval): " << (currentValue ? "on (1)" : "off (0)") << "\n";
+    std::cout << " Enter 0 or 1 to set, or press Enter to keep: ";
+    std::string line;
+    std::getline(std::cin, line);
+    if (line.empty()) {
+        return currentValue;
+    }
+    std::transform(line.begin(), line.end(), line.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (line == "1" || line == "true" || line == "yes" || line == "on") {
+        return true;
+    }
+    if (line == "0" || line == "false" || line == "no" || line == "off") {
+        return false;
+    }
+    std::cout << " Invalid input, keeping current.\n";
+    return currentValue;
+}
 
 inline std::vector<std::array<ChannelInput, 4>> ConfigureChannelsInteractively(
     const std::vector<std::string>& files,

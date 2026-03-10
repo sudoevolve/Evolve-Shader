@@ -28,14 +28,14 @@ inline Texture* GetTextureForPath(const std::string& path) {
     }
 }
 
-inline std::vector<fs::path> ScanGlobalImages() {
+inline std::vector<fs::path> ScanGlobalImages(const fs::path& dir = "iChannel") {
     std::vector<fs::path> images;
     std::vector<std::string> extensions = { ".png", ".jpg", ".jpeg" };
-    if (!fs::exists("iChannel") || !fs::is_directory("iChannel")) {
-        std::cerr << "Warning: 'iChannel' folder not found.\n";
+    if (!fs::exists(dir) || !fs::is_directory(dir)) {
+        // std::cerr << "Warning: '" << dir.string() << "' folder not found.\n";
         return images;
     }
-    for (const auto& entry : fs::recursive_directory_iterator("iChannel")) {
+    for (const auto& entry : fs::recursive_directory_iterator(dir)) {
         if (!entry.is_regular_file()) continue;
         std::string ext = entry.path().extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);

@@ -1,0 +1,34 @@
+{
+  "passes": [
+    [
+      { "type": 1, "bufferIndex": -1, "imageName": "color_noise.png" },
+      { "type": 1, "bufferIndex": -1, "imageName": "london.png" },
+      { "type": 2, "bufferIndex": 0 },
+      { "type": 0, "bufferIndex": -1 }
+    ],
+    [
+      { "type": 2, "bufferIndex": 0 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 }
+    ],
+    [
+      { "type": 2, "bufferIndex": 1 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 }
+    ],
+    [
+      { "type": 2, "bufferIndex": 2 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 }
+    ],
+    [
+      { "type": 2, "bufferIndex": 0 },
+      { "type": 2, "bufferIndex": 1 },
+      { "type": 2, "bufferIndex": 2 },
+      { "type": 2, "bufferIndex": 3 }
+    ]
+  ]
+}

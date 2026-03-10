@@ -49,9 +49,10 @@ inline std::string LoadShaderFile(const std::string& path) {
     return ss.str();
 }
 
-inline std::vector<std::string> ScanShaderFiles() {
+inline std::vector<std::string> ScanShaderFiles(const fs::path& dir = "frag") {
     std::vector<std::pair<int, fs::path>> entries;
-    for (const auto& entry : fs::directory_iterator("frag")) {
+    if (!fs::exists(dir) || !fs::is_directory(dir)) return {};
+    for (const auto& entry : fs::directory_iterator(dir)) {
         if (entry.is_regular_file() && entry.path().extension() == ".frag") {
             std::string stem = entry.path().stem().string();
             size_t numberStart = std::string::npos;

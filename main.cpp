@@ -27,6 +27,7 @@ namespace fs = std::filesystem;
 #include "include/ShaderIO.h"
 #include "include/Resources.h"
 #include "include/ChannelConfig.h"
+#include "include/PresetManager.h"
 
 namespace {
 
@@ -153,36 +154,6 @@ std::string ToLower(std::string value) {
     return value;
 }
 
-bool ReadBoolFromEnv(const char* envVarName, bool fallbackValue) {
-    std::string value;
-
-#ifdef _WIN32
-    char* rawValue = nullptr;
-    size_t valueLength = 0;
-    if (_dupenv_s(&rawValue, &valueLength, envVarName) != 0 || !rawValue) {
-        return fallbackValue;
-    }
-
-    value = ToLower(rawValue);
-    free(rawValue);
-#else
-    const char* rawValue = std::getenv(envVarName);
-    if (!rawValue) {
-        return fallbackValue;
-    }
-
-    value = ToLower(rawValue);
-#endif
-
-    if (value == "1" || value == "true" || value == "yes" || value == "on") {
-        return true;
-    }
-    if (value == "0" || value == "false" || value == "no" || value == "off") {
-        return false;
-    }
-    return fallbackValue;
-}
-
 void cursorPosCallback(GLFWwindow* window, double x, double y) {
     if (auto* app = GetAppContext(window)) {
         app->input.mouseX = x;
@@ -256,9 +227,9 @@ void PrintGlobalImages(const std::vector<fs::path>& globalImages) {
     }
 }
 
-bool ValidateShaderDirectory() {
-    if (!fs::exists("frag") || !fs::is_directory("frag")) {
-        std::cerr << "Error: 'frag' folder not found!\n";
+bool ValidateShaderDirectory(const fs::path& dir = "frag") {
+    if (!fs::exists(dir) || !fs::is_directory(dir)) {
+        std::cerr << "Error: '" << dir.string() << "' folder not found!\n";
         return false;
     }
     return true;
@@ -339,12 +310,11 @@ WindowHandle CreateWindow(AppContext& app, bool vsyncEnabled) {
     }
 
     glfwMakeContextCurrent(rawWindow);
+    glfwSwapInterval(vsyncEnabled ? 1 : 0);
     glfwSetWindowUserPointer(rawWindow, &app);
     glfwSetCursorPosCallback(rawWindow, cursorPosCallback);
     glfwSetMouseButtonCallback(rawWindow, mouseButtonCallback);
     glfwSetFramebufferSizeCallback(rawWindow, framebufferSizeCallback);
-    glfwSwapInterval(vsyncEnabled ? 1 : 0);
-
     return WindowHandle(rawWindow);
 }
 
@@ -501,20 +471,95 @@ void UpdateWindowTitle(GLFWwindow* window, double currentTime, double& lastFpsTi
 } // namespace
 
 int main() {
-    const std::vector<fs::path> globalImages = ScanGlobalImages();
+    fs::path fragDir = "frag";
+    fs::path iChannelDir = "iChannel";
+    std::string loadedPresetName = "";
+    bool vsyncEnabled = false;
+
+    std::vector<std::string> presets = ListPresets();
+    if (!presets.empty()) {
+        while (true) {
+            std::cout << "\nFound existing presets:\n";
+            std::cout << "  [0] New Configuration\n";
+            for (size_t i = 0; i < presets.size(); ++i) {
+                std::cout << "  [" << (i + 1) << "] " << presets[i] << "\n";
+            }
+            std::cout << "  [S] Settings\n";
+            std::cout << "Select a preset, start new, or open settings: ";
+            std::string line;
+            std::getline(std::cin, line);
+            if (line.empty()) {
+                break;
+            }
+            const std::string lower = ToLower(line);
+            if (lower == "s" || lower == "settings") {
+                vsyncEnabled = ConfigureVsyncSetting(vsyncEnabled);
+                continue;
+            }
+            try {
+                int choice = std::stoi(line);
+                if (choice == 0) {
+                    break;
+                }
+                if (choice > 0 && choice <= static_cast<int>(presets.size())) {
+                    loadedPresetName = presets[choice - 1];
+                    fragDir = fs::path("presets") / loadedPresetName / "frag";
+                    iChannelDir = fs::path("presets") / loadedPresetName / "iChannel";
+                    std::cout << "Loading preset: " << loadedPresetName << "\n";
+                    break;
+                }
+            }
+            catch (...) {
+            }
+            std::cout << " Invalid selection. Try again.\n";
+        }
+    }
+    else {
+        std::cout << "\nNo presets found.\n";
+        std::cout << "Press Enter to continue or type 's' for settings: ";
+        std::string line;
+        std::getline(std::cin, line);
+        const std::string lower = ToLower(line);
+        if (lower == "s" || lower == "settings") {
+            vsyncEnabled = ConfigureVsyncSetting(vsyncEnabled);
+        }
+    }
+
+    const std::vector<fs::path> globalImages = ScanGlobalImages(iChannelDir);
     PrintGlobalImages(globalImages);
-    if (!ValidateShaderDirectory()) {
+    if (!ValidateShaderDirectory(fragDir)) {
         return -1;
     }
 
-    const std::vector<std::string> fragFiles = ScanShaderFiles();
+    const std::vector<std::string> fragFiles = ScanShaderFiles(fragDir);
     if (fragFiles.empty()) {
         std::cerr << "No .frag files found!\n";
         return -1;
     }
     PrintShaderFiles(fragFiles);
 
-    const auto channelConfig = ConfigureChannelsInteractively(fragFiles, globalImages);
+    std::vector<std::array<ChannelInput, 4>> channelConfig;
+    if (!loadedPresetName.empty()) {
+        channelConfig = LoadPresetConfig(fs::path("presets") / loadedPresetName, globalImages);
+        if (channelConfig.empty()) {
+            std::cout << "Failed to load config or empty config. Falling back to interactive setup.\n";
+            channelConfig = ConfigureChannelsInteractively(fragFiles, globalImages);
+        }
+    }
+    else {
+        channelConfig = ConfigureChannelsInteractively(fragFiles, globalImages);
+
+        std::cout << "\nDo you want to save this configuration as a preset? (y/n): ";
+        std::string line;
+        std::getline(std::cin, line);
+        if (line == "y" || line == "Y") {
+            std::cout << "Enter preset name: ";
+            std::getline(std::cin, line);
+            if (!line.empty()) {
+                SavePreset(line, fragFiles, globalImages, channelConfig);
+            }
+        }
+    }
 
     GlfwSession glfwSession;
     if (!glfwSession) {
@@ -522,7 +567,6 @@ int main() {
     }
 
     AppContext app;
-    const bool vsyncEnabled = ReadBoolFromEnv("EVOLVE_SHADER_VSYNC", true);
     WindowHandle window = CreateWindow(app, vsyncEnabled);
     if (!window) {
         return -1;
@@ -542,7 +586,6 @@ int main() {
     glViewport(0, 0, app.winWidth, app.winHeight);
 
     std::cout << "OpenGL: " << glGetString(GL_VERSION) << "\n";
-    std::cout << "VSync: " << (vsyncEnabled ? "on" : "off") << " (override with EVOLVE_SHADER_VSYNC=0/1)\n";
 
     const bool sRGBCapable = glfwGetWindowAttrib(window.get(), GLFW_SRGB_CAPABLE) == GLFW_TRUE;
 
@@ -652,7 +695,7 @@ int main() {
         }
 
         Framebuffer::unbind();
-        glViewport(0, 0, frameData.width, frameData.height);
+        glViewport(0, 0, app.winWidth, app.winHeight);
         if (sRGBCapable) {
             glEnable(GL_FRAMEBUFFER_SRGB);
         }

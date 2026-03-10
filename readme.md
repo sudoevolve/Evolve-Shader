@@ -43,17 +43,22 @@ Evolve-Shader/
 - Ping-pong framebuffer feedback for recursive / temporal effects.
 - Common Shadertoy uniforms such as `iResolution`, `iTime`, `iMouse`, `iDate`, and `iChannelResolution`.
 - Lazy global texture cache for images discovered under `iChannel/`.
+- **Preset System**: Save your configuration (channels + shader files + images) to a folder and reload it later.
 - FPS shown in the window title.
 
 ## Runtime Behavior
 
 At startup the app does the following:
 
-1. Scans `iChannel/` recursively for `.png`, `.jpg`, and `.jpeg` images.
-2. Scans `frag/` non-recursively for `.frag` files.
-3. Sorts shader passes by the first number found in each filename.
-4. Prompts you to configure `iChannel0`-`iChannel3` for each pass.
-5. Renders all passes off-screen, then displays the last pass on screen.
+1. Checks for presets in `presets/`.
+2. If presets exist, asks to load one or start new.
+3. If new configuration selected:
+    a. Scans `iChannel/` recursively for `.png`, `.jpg`, and `.jpeg` images.
+    b. Scans `frag/` non-recursively for `.frag` files.
+    c. Sorts shader passes by the first number found in each filename.
+    d. Prompts you to configure `iChannel0`-`iChannel3` for each pass.
+    e. Asks if you want to save the configuration as a new preset.
+4. Renders all passes off-screen, then displays the last pass on screen.
 
 Important behavior details:
 
@@ -62,7 +67,7 @@ Important behavior details:
 - `iChannel/` is scanned recursively.
 - On the very first frame, buffer inputs fall back to an empty texture.
 - Configured global images are preloaded before the render loop starts.
-- VSync is enabled by default; set `EVOLVE_SHADER_VSYNC=0` to disable it.
+- VSync is **disabled** by default. Use the startup **Settings** menu to toggle VSync on/off.
 
 ## Shader Pass Ordering
 

@@ -43,17 +43,22 @@ Evolve-Shader/
 - 支持 ping-pong FBO，实现 feedback / temporal 效果。
 - 支持常见 Shadertoy uniform：`iResolution`、`iTime`、`iMouse`、`iDate`、`iChannelResolution` 等。
 - 对 `iChannel/` 下的图片做全局纹理缓存。
+- **预设系统 (Preset System)**：可以将当前的配置（通道设置 + Shader 文件 + 图片）保存为预设，下次启动直接加载。
 - 在窗口标题栏显示 FPS。
 
 ## 程序启动时会做什么
 
 程序启动后会按下面流程运行：
 
-1. 递归扫描 `iChannel/` 中的 `.png`、`.jpg`、`.jpeg` 图片。
-2. 非递归扫描 `frag/` 中的 `.frag` 文件。
-3. 按文件名中出现的第一个数字为 shader pass 排序。
-4. 提示你为每个 pass 配置 `iChannel0`-`iChannel3`。
-5. 先离屏渲染所有 pass，再把最后一个 pass 显示到屏幕上。
+1. 检查 `presets/` 目录下是否有预设。
+2. 如果有预设，询问是加载预设还是新建配置。
+3. 如果选择新建配置：
+    a. 递归扫描 `iChannel/` 中的 `.png`、`.jpg`、`.jpeg` 图片。
+    b. 非递归扫描 `frag/` 中的 `.frag` 文件。
+    c. 按文件名中出现的第一个数字为 shader pass 排序。
+    d. 提示你为每个 pass 配置 `iChannel0`-`iChannel3`。
+    e. 询问是否保存为预设。
+4. 先离屏渲染所有 pass，再把最后一个 pass 显示到屏幕上。
 
 几个容易忽略的细节：
 
@@ -62,7 +67,7 @@ Evolve-Shader/
 - `iChannel/` 当前是递归扫描。
 - 第一帧读取 buffer 时，会退回到一个空纹理。
 - 已配置到 channel 的全局图片会在进入主循环前预加载。
-- 默认开启垂直同步；可用 `EVOLVE_SHADER_VSYNC=0` 关闭。
+- 默认 **关闭** 垂直同步。可在启动时的 **Settings** 菜单中开关。
 
 ## Shader Pass 命名建议
 

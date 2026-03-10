@@ -1,36 +1,61 @@
-// Created by sebastien durand - 2016
-// License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-//-----------------------------------------------------
+// Copyright Inigo Quilez, 2017 - https://iquilezles.org/
+// I am the sole copyright owner of this Work. You cannot
+// host, display, distribute or share this Work neither as
+// is or altered, in any form including physical and
+// digital. You cannot use this Work in any commercial or
+// non-commercial product, website or project. You cannot
+// sell this Work and you cannot mint an NFTs of it. You
+// cannot use this Work to train AI models. I share this
+// Work for educational purposes, you can link to it as
+// an URL, proper attribution and unmodified screenshot,
+// as part of your educational material. If these
+// conditions are too restrictive please contact me.
 
-#define NB      40.
-#define MAX_ACC  3.
-#define MAX_VEL .5
-#define RESIST  .2
+// You can buy a metal print of this shader here:
+// https://www.redbubble.com/i/metal-print/Ladybug-by-InigoQuilez/39845563.0JXQP
 
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    vec2 q = fragCoord / iResolution.xy;
+    
+    
+    // dof
+    const float focus = 2.35;
 
-
-// Distance to a fish
-float sdFish(float i, vec2 p, float a) {
-    float ds, c = cos(a), s = sin(a);
-    p *= 20.*mat2(c,s,-s,c); // Rotate and rescale
-    p.x *= .97 + (.04+.2*p.y)*cos(i+9.*iTime);  // Swiming ondulation (+rotate in Z axes)
-    ds = min(length(p-vec2(.8,0))-.45, length(p-vec2(-.14,0))-.12);   // Distance to fish
-    p.y = abs(p.y)+.13;
-    return max(min(length(p),length(p-vec2(.56,0)))-.3,-ds)*.05;
-}
-
-
-void mainImage(out vec4 cout, vec2 uv) {
-    vec2 p = 1./iResolution.xy;
-    float d, m = 1e6;
-    vec4 c, ct, fish;
-
-    for(float i=0.; i<NB; i++) {     
-        fish = texelFetch(iChannel0,ivec2(i,0),0); // (xy = position, zw = velocity) 
-        m = min(m, d = sdFish(i, fish.xy-uv.xy*p.y, atan(fish.w,fish.z))); // Draw fish according to its direction
-        // Background color sum based on fish velocity (blue => red) + Halo - simple version: c*smoothstep(.5,0.,d);
-        ct += mix(vec4(0,0,1,1), vec4(1,0,0,1), length(fish.zw)/MAX_VEL)*(2./(1.+3e3*d*d*d) + .5/(1.+30.*d*d)); 
+    vec4 acc = vec4(0.0);
+    const int N = 12;
+	for( int j=-N; j<=N; j++ )
+    for( int i=-N; i<=N; i++ )
+    {
+        vec2 off = vec2(float(i),float(j));
+        
+        vec4 tmp = texture( iChannel0, q + off/vec2(800.0,450.0) ); 
+        
+        float depth = tmp.w;
+        
+        vec3  color = tmp.xyz;
+        
+        float coc = 0.05 + 12.0*abs(depth-focus)/depth;
+        
+        if( dot(off,off) < (coc*coc) )
+        {
+            float w = 1.0/(coc*coc); 
+            acc += vec4(color*w,w);
+        }
     }
-    // Mix fish color (white) and Halo
-    cout = mix(vec4(1.),.5*sqrt(ct/NB), smoothstep(0.,p.y*1.2, m));
+    
+    vec3 col = acc.xyz / acc.w;
+
+    
+    // gamma
+    col = pow( col, vec3(0.4545) );
+    
+    // color correct - it seems my laptop has a fucked up contrast/gamma seeting, so I need
+    //                 to do this for the picture to look okey in all computers but mine...
+    col = col*1.1 - 0.06;
+    
+    // vignetting
+    col *= 0.8 + 0.3*sqrt( 16.0*q.x*q.y*(1.0-q.x)*(1.0-q.y) );
+
+    fragColor = vec4(col,1.0);
 }
