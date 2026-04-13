@@ -389,6 +389,21 @@ void ApplyCommonUniforms(const ProgramUniforms& uniforms, const FrameUniformData
     }
 }
 
+void InitializeStaticSamplerUniforms(std::vector<ShaderPass>& passes, const PresentPass& presentPass) {
+    for (auto& pass : passes) {
+        pass.program.use();
+        for (int channel = 0; channel < kChannelCount; ++channel) {
+            if (pass.uniforms.iChannel[channel] != -1) {
+                glUniform1i(pass.uniforms.iChannel[channel], channel);
+            }
+        }
+    }
+    if (presentPass.textureLocation != -1) {
+        presentPass.program.use();
+        glUniform1i(presentPass.textureLocation, 0);
+    }
+}
+
 std::vector<PassChannelBindings> BuildChannelBindings(
     const std::vector<std::array<ChannelInput, kChannelCount>>& channelConfig,
     const std::vector<fs::path>& globalImages) {
@@ -628,11 +643,14 @@ int main() {
     Texture emptyTex;
     emptyTex.createEmpty();
 
+    InitializeStaticSamplerUniforms(passes, presentPass);
+
     app.start = std::chrono::steady_clock::now();
     float lastTimeSeconds = 0.0f;
     double lastFpsTime = glfwGetTime();
     int frameCount = 0;
     bool usePingAsPrev = true;
+    std::array<GLuint, kChannelCount> textureBindings = { 0, 0, 0, 0 };
 
     while (!glfwWindowShouldClose(window.get())) {
         const double currentTime = glfwGetTime();
@@ -652,7 +670,12 @@ int main() {
 
         auto& prevFbos = usePingAsPrev ? pingFbos : pongFbos;
         auto& currFbos = usePingAsPrev ? pongFbos : pingFbos;
+        vao.bind();
 
+        glViewport(0, 0, frameData.width, frameData.height);
+        if (sRGBCapable) {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+        }
         for (size_t passIndex = 0; passIndex < passes.size(); ++passIndex) {
             ShaderPass& pass = passes[passIndex];
             pass.program.use();
@@ -671,8 +694,10 @@ int main() {
                     currFbos,
                     emptyTex);
 
-                boundTexture->bind(channel);
-                glUniform1i(pass.uniforms.iChannel[channel], channel);
+                if (textureBindings[channel] != boundTexture->id) {
+                    boundTexture->bind(channel);
+                    textureBindings[channel] = boundTexture->id;
+                }
 
                 if (pass.uniforms.iChannelResolution[channel] != -1) {
                     glUniform3f(pass.uniforms.iChannelResolution[channel],
@@ -683,15 +708,9 @@ int main() {
             }
 
             currFbos[passIndex].bind();
-            glViewport(0, 0, frameData.width, frameData.height);
-            if (sRGBCapable) {
-                glDisable(GL_FRAMEBUFFER_SRGB);
-            }
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-            vao.bind();
             glDrawArrays(GL_TRIANGLES, 0, 6);
-            VertexArray::unbind();
         }
 
         Framebuffer::unbind();
@@ -702,16 +721,15 @@ int main() {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         presentPass.program.use();
-        currFbos.back().colorTex.bind(0);
-        if (presentPass.textureLocation != -1) {
-            glUniform1i(presentPass.textureLocation, 0);
+        if (textureBindings[0] != currFbos.back().colorTex.id) {
+            currFbos.back().colorTex.bind(0);
+            textureBindings[0] = currFbos.back().colorTex.id;
         }
-        vao.bind();
         glDrawArrays(GL_TRIANGLES, 0, 6);
-        VertexArray::unbind();
         if (sRGBCapable) {
             glDisable(GL_FRAMEBUFFER_SRGB);
         }
+        VertexArray::unbind();
 
         glfwSwapBuffers(window.get());
         glfwPollEvents();
