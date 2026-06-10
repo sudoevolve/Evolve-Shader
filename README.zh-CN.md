@@ -29,8 +29,7 @@ Evolve-Shader/
 │  ├─ color_noise.png
 │  ├─ london.png
 │  └─ rock.png
-├─ Evolve shader.sln
-├─ Evolve shader.vcxproj
+├─ CMakeLists.txt
 ├─ LICENSE
 └─ readme.md
 ```
@@ -114,47 +113,59 @@ frag/2.frag
 
 ## 依赖项
 
-这个仓库没有把所有第三方依赖都直接放进来。
-当前 Visual Studio 工程默认依赖你的本地环境已经提供：
+当前 CMake 构建会自动把第三方源码拉到 `3rd/`：
 
 - 支持 OpenGL 3.3 的显卡与驱动
 - `glfw3`
-- `glad`
+- `glew`
 - `stb_image.h`
 
-项目文件当前使用的是 MSVC 工具集 `v145`。
-如果你的 Visual Studio 没有对应工具集，IDE 可能会提示你重定向或升级工具集。
+你只需要安装 CMake、C++17 编译器、Git，以及平台 OpenGL 开发环境。
 
-## 推荐的 Windows 构建方式
+## 跨平台 CMake 构建
 
-推荐使用 Visual Studio + vcpkg。
+### Windows
 
-### 1）安装 vcpkg
-
-```powershell
-git clone https://github.com/microsoft/vcpkg
-cd vcpkg
-.\bootstrap-vcpkg.bat
-.\vcpkg integrate install
-```
-
-### 2）安装依赖
+安装 Visual Studio 2022 C++ 工作负载、CMake、Git，然后执行：
 
 ```powershell
-.\vcpkg install glfw3 glad stb --triplet x64-windows
+cmake -S . -B build
+cmake --build build --config Release
 ```
 
-### 3）打开并编译
+### macOS
 
-- 用 Visual Studio 打开 `Evolve shader.sln`
-- 选择 `x64` 平台，以及 `Debug` 或 `Release`
-- 直接构建解决方案
+安装 Xcode Command Line Tools、CMake、Git，然后执行：
 
-### 4）注意工作目录
+```bash
+cmake -S . -B build
+cmake --build build --config Release
+```
 
-程序运行时会按相对路径查找 `frag/` 和可选的 `iChannel/`。
+### Linux
 
-所以运行时的工作目录应当是仓库根目录，而不是 `x64/Release/` 之类的输出目录。
+安装 CMake、Git、C++17 编译器和 OpenGL/X11 开发包。例如 Ubuntu/Debian：
+
+```bash
+sudo apt install build-essential cmake git libgl1-mesa-dev xorg-dev
+```
+
+然后执行：
+
+```bash
+cmake -S . -B build
+cmake --build build --config Release
+```
+
+### 运行
+
+CMake 每次构建后会把 `frag/`、`iChannel/`、`presets/` 复制到可执行文件旁边，因此可以从构建输出目录运行：
+
+```bash
+./build/EvolveShader
+```
+
+如果使用 Visual Studio 这类多配置生成器，可执行文件通常在配置目录下，例如 `build/Release/EvolveShader.exe`。
 
 ## 使用方法
 
@@ -197,7 +208,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 
 ## 当前限制与说明
 
-- 代码结构本身具备跨平台潜力，但当前仓库只提供了 Visual Studio 工程。
+- 第三方源码会在 CMake 配置阶段拉取到 `3rd/`。
 - `iChannel` 配置只在运行时交互输入，不会保存到磁盘。
 - Shader 只在启动时加载一次，目前没有热重载。
 - 屏幕上最终显示的永远是最后一个 pass。

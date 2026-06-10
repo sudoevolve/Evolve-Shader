@@ -12,13 +12,16 @@
 #include <string>
 #include <vector>
 
-#include <glad/glad.h>
+#include <GL/glew.h>
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 
+#ifdef _MSC_VER
 #pragma warning(disable : 4244)
 #pragma warning(disable : 4566)
+#endif
 
 namespace fs = std::filesystem;
 
@@ -587,9 +590,11 @@ int main() {
         return -1;
     }
 
-    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
+    glewExperimental = GL_TRUE;
+    if (glewInit() != GLEW_OK) {
         return -1;
     }
+    glGetError();
 
     int framebufferWidth = 0;
     int framebufferHeight = 0;

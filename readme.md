@@ -29,8 +29,7 @@ Evolve-Shader/
 │  ├─ color_noise.png
 │  ├─ london.png
 │  └─ rock.png
-├─ Evolve shader.sln
-├─ Evolve shader.vcxproj
+├─ CMakeLists.txt
 ├─ LICENSE
 └─ readme.md
 ```
@@ -114,47 +113,59 @@ The wrapper injected by `include/ShaderIO.h` exposes these uniforms:
 
 ## Dependencies
 
-This repository does not vendor all third-party headers and libraries.
-The Visual Studio project expects your environment to provide these dependencies:
+The CMake build fetches third-party source trees into `3rd/` automatically:
 
 - OpenGL 3.3 compatible GPU / driver
 - `glfw3`
-- `glad`
+- `glew`
 - `stb_image.h`
 
-The included project file currently targets MSVC toolset `v145`.
-If your Visual Studio installation uses a different toolset, the IDE may ask you to retarget the project.
+You only need CMake, a C++17 compiler, Git, and platform OpenGL development support.
 
-## Recommended Windows Setup
+## Cross-Platform CMake Build
 
-The easiest path on Windows is Visual Studio + vcpkg integration.
+### Windows
 
-### 1. Install vcpkg
-
-```powershell
-git clone https://github.com/microsoft/vcpkg
-cd vcpkg
-.\bootstrap-vcpkg.bat
-.\vcpkg integrate install
-```
-
-### 2. Install dependencies
+Install Visual Studio 2022 with the C++ workload, CMake, and Git. Then run:
 
 ```powershell
-.\vcpkg install glfw3 glad stb --triplet x64-windows
+cmake -S . -B build
+cmake --build build --config Release
 ```
 
-### 3. Open and build
+### macOS
 
-- Open `Evolve shader.sln` in Visual Studio.
-- Select `x64` and either `Debug` or `Release`.
-- Build the solution.
+Install Xcode Command Line Tools, CMake, and Git. Then run:
 
-### 4. Run with the correct working directory
+```bash
+cmake -S . -B build
+cmake --build build --config Release
+```
 
-The executable expects `frag/` and optional `iChannel/` to exist relative to the working directory.
+### Linux
 
-Use the repository root as the working directory, not the build output folder.
+Install CMake, Git, a C++17 compiler, and OpenGL/X11 development packages. For example, on Ubuntu/Debian:
+
+```bash
+sudo apt install build-essential cmake git libgl1-mesa-dev xorg-dev
+```
+
+Then run:
+
+```bash
+cmake -S . -B build
+cmake --build build --config Release
+```
+
+### Run
+
+CMake copies `frag/`, `iChannel/`, and `presets/` next to the executable after each build, so you can run from the build output directory:
+
+```bash
+./build/EvolveShader
+```
+
+For multi-config generators such as Visual Studio, run the executable under the configuration folder, for example `build/Release/EvolveShader.exe`.
 
 ## Usage
 
@@ -197,7 +208,7 @@ The runtime wraps your shader automatically.
 
 ## Notes and Limitations
 
-- The app is architecturally portable, but this repository currently ships only a Visual Studio solution.
+- Third-party sources are fetched into `3rd/` during CMake configure.
 - Channel configuration is interactive only; it is not saved to disk.
 - Shader files are loaded only once at startup; there is no hot reload.
 - The last pass is always the one presented to the screen.
