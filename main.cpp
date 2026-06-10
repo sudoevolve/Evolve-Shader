@@ -3,7 +3,6 @@
 #include <array>
 #include <chrono>
 #include <cctype>
-#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <iostream>
@@ -11,6 +10,16 @@
 #include <set>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <cstdlib>
+#else
+#include <limits.h>
+#include <unistd.h>
+#endif
 
 #include <GL/glew.h>
 #define GLFW_INCLUDE_NONE
@@ -155,6 +164,56 @@ std::string ToLower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
         [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
+}
+
+fs::path GetExecutableDirectory() {
+#ifdef _WIN32
+    std::wstring buffer(MAX_PATH, L'\0');
+    DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    while (length == buffer.size()) {
+        buffer.resize(buffer.size() * 2);
+        length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    }
+    if (length == 0) {
+        return fs::current_path();
+    }
+    buffer.resize(length);
+    return fs::path(buffer).parent_path();
+#elif defined(__APPLE__)
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::vector<char> buffer(size);
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+        return fs::current_path();
+    }
+    return fs::weakly_canonical(fs::path(buffer.data())).parent_path();
+#else
+    std::vector<char> buffer(PATH_MAX);
+    ssize_t length = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    if (length <= 0) {
+        return fs::current_path();
+    }
+    buffer[static_cast<size_t>(length)] = '\0';
+    return fs::path(buffer.data()).parent_path();
+#endif
+}
+
+bool HasRuntimeAssets(const fs::path& dir) {
+    return fs::is_directory(dir / "presets") || fs::is_directory(dir / "frag");
+}
+
+fs::path ResolveResourceRoot() {
+    const fs::path current = fs::current_path();
+    if (HasRuntimeAssets(current)) {
+        return current;
+    }
+
+    const fs::path executableDir = GetExecutableDirectory();
+    if (HasRuntimeAssets(executableDir)) {
+        return executableDir;
+    }
+
+    return current;
 }
 
 void cursorPosCallback(GLFWwindow* window, double x, double y) {
@@ -443,6 +502,19 @@ std::vector<PassChannelBindings> BuildChannelBindings(
     return bindings;
 }
 
+bool HasMatchingChannelConfigSize(
+    const std::vector<std::array<ChannelInput, kChannelCount>>& channelConfig,
+    size_t passCount) {
+
+    if (channelConfig.size() == passCount) {
+        return true;
+    }
+
+    std::cerr << "Preset channel config has " << channelConfig.size()
+        << " pass(es), but " << passCount << " shader pass(es) were found.\n";
+    return false;
+}
+
 const Texture* ResolveChannelTexture(const ChannelBinding& binding,
     size_t passIndex,
     int frameIndex,
@@ -489,12 +561,16 @@ void UpdateWindowTitle(GLFWwindow* window, double currentTime, double& lastFpsTi
 } // namespace
 
 int main() {
-    fs::path fragDir = "frag";
-    fs::path iChannelDir = "iChannel";
+    const fs::path resourceRoot = ResolveResourceRoot();
+    const fs::path presetsDir = resourceRoot / "presets";
+    fs::path fragDir = resourceRoot / "frag";
+    fs::path iChannelDir = resourceRoot / "iChannel";
     std::string loadedPresetName = "";
     bool vsyncEnabled = false;
 
-    std::vector<std::string> presets = ListPresets();
+    std::cout << "Resource root: " << resourceRoot.string() << "\n";
+
+    std::vector<std::string> presets = ListPresets(presetsDir);
     if (!presets.empty()) {
         while (true) {
             std::cout << "\nFound existing presets:\n";
@@ -521,8 +597,9 @@ int main() {
                 }
                 if (choice > 0 && choice <= static_cast<int>(presets.size())) {
                     loadedPresetName = presets[choice - 1];
-                    fragDir = fs::path("presets") / loadedPresetName / "frag";
-                    iChannelDir = fs::path("presets") / loadedPresetName / "iChannel";
+                    const fs::path presetDir = presetsDir / loadedPresetName;
+                    fragDir = presetDir / "frag";
+                    iChannelDir = presetDir / "iChannel";
                     std::cout << "Loading preset: " << loadedPresetName << "\n";
                     break;
                 }
@@ -558,9 +635,9 @@ int main() {
 
     std::vector<std::array<ChannelInput, 4>> channelConfig;
     if (!loadedPresetName.empty()) {
-        channelConfig = LoadPresetConfig(fs::path("presets") / loadedPresetName, globalImages);
-        if (channelConfig.empty()) {
-            std::cout << "Failed to load config or empty config. Falling back to interactive setup.\n";
+        channelConfig = LoadPresetConfig(presetsDir / loadedPresetName, globalImages);
+        if (channelConfig.empty() || !HasMatchingChannelConfigSize(channelConfig, fragFiles.size())) {
+            std::cout << "Failed to load a usable preset config. Falling back to interactive setup.\n";
             channelConfig = ConfigureChannelsInteractively(fragFiles, globalImages);
         }
     }
@@ -574,7 +651,7 @@ int main() {
             std::cout << "Enter preset name: ";
             std::getline(std::cin, line);
             if (!line.empty()) {
-                SavePreset(line, fragFiles, globalImages, channelConfig);
+                SavePreset(line, fragFiles, globalImages, channelConfig, presetsDir);
             }
         }
     }
@@ -741,6 +818,8 @@ int main() {
         usePingAsPrev = !usePingAsPrev;
         ++app.frame;
     }
+
+    ClearGlobalTextureCache();
 
     return 0;
 }

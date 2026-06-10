@@ -11,24 +11,26 @@
 
 namespace fs = std::filesystem;
 
-inline std::vector<std::string> ListPresets() {
+inline std::vector<std::string> ListPresets(const fs::path& presetsDir = "presets") {
     std::vector<std::string> presets;
-    if (fs::exists("presets") && fs::is_directory("presets")) {
-        for (const auto& entry : fs::directory_iterator("presets")) {
+    if (fs::exists(presetsDir) && fs::is_directory(presetsDir)) {
+        for (const auto& entry : fs::directory_iterator(presetsDir)) {
             if (entry.is_directory()) {
                 presets.push_back(entry.path().filename().string());
             }
         }
     }
+    std::sort(presets.begin(), presets.end());
     return presets;
 }
 
 inline void SavePreset(const std::string& name,
     const std::vector<std::string>& fragFiles,
     const std::vector<fs::path>& globalImages,
-    const std::vector<std::array<ChannelInput, 4>>& config) {
+    const std::vector<std::array<ChannelInput, 4>>& config,
+    const fs::path& presetsRoot = "presets") {
     
-    fs::path presetDir = fs::path("presets") / name;
+    fs::path presetDir = presetsRoot / name;
     if (fs::exists(presetDir)) {
         std::cout << "Overwrite existing preset '" << name << "'? (y/n): ";
         char c; 
@@ -117,7 +119,13 @@ inline std::vector<std::array<ChannelInput, 4>> LoadPresetConfig(
     for (std::sregex_iterator i = passes_begin; i != passes_end; ++i) {
         std::smatch match = *i;
         ChannelInput input;
-        input.type = static_cast<ChannelInput::Type>(std::stoi(match[1].str()));
+        const int typeValue = std::stoi(match[1].str());
+        if (typeValue < ChannelInput::NONE || typeValue > ChannelInput::BUFFER) {
+            input.type = ChannelInput::NONE;
+        }
+        else {
+            input.type = static_cast<ChannelInput::Type>(typeValue);
+        }
         input.bufferIndex = std::stoi(match[2].str());
         input.imageIndex = -1;
 

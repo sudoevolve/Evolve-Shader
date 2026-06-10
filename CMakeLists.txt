@@ -8,27 +8,31 @@ project(EvolveShader
 
 find_package(Git REQUIRED)
 
-function(fetch_git_dependency name repository tag)
+set(GLFW_GIT_REF 3.4)
+set(GLEW_GIT_REF glew-cmake-2.2.0)
+set(STB_GIT_REF 31c1ad37456438565541f4919958214b6e762fb4)
+
+function(fetch_git_dependency name repository ref)
     set(source_dir "${CMAKE_CURRENT_SOURCE_DIR}/3rd/${name}-src")
 
-    if(EXISTS "${source_dir}/.git")
-        execute_process(
-            COMMAND "${GIT_EXECUTABLE}" fetch --depth 1 origin "${tag}"
-            WORKING_DIRECTORY "${source_dir}"
-            COMMAND_ERROR_IS_FATAL ANY
-        )
-        execute_process(
-            COMMAND "${GIT_EXECUTABLE}" checkout --detach FETCH_HEAD
-            WORKING_DIRECTORY "${source_dir}"
-            COMMAND_ERROR_IS_FATAL ANY
-        )
-    else()
+    if(NOT EXISTS "${source_dir}/.git")
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/3rd")
         execute_process(
-            COMMAND "${GIT_EXECUTABLE}" clone --depth 1 --branch "${tag}" "${repository}" "${source_dir}"
+            COMMAND "${GIT_EXECUTABLE}" clone --quiet --no-checkout --depth 1 "${repository}" "${source_dir}"
             COMMAND_ERROR_IS_FATAL ANY
         )
     endif()
+
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" fetch --quiet --depth 1 origin "${ref}"
+        WORKING_DIRECTORY "${source_dir}"
+        COMMAND_ERROR_IS_FATAL ANY
+    )
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD
+        WORKING_DIRECTORY "${source_dir}"
+        COMMAND_ERROR_IS_FATAL ANY
+    )
 
     set(${name}_SOURCE_DIR "${source_dir}" PARENT_SCOPE)
 endfunction()
@@ -38,13 +42,9 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 
-set(glew-cmake_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-set(glew-cmake_BUILD_STATIC ON CACHE BOOL "" FORCE)
-set(ONLY_LIBS ON CACHE BOOL "" FORCE)
-
-fetch_git_dependency(glfw https://github.com/glfw/glfw.git 3.4)
-fetch_git_dependency(glew https://github.com/Perlmint/glew-cmake.git glew-cmake-2.2.0)
-fetch_git_dependency(stb https://github.com/nothings/stb.git master)
+fetch_git_dependency(glfw https://github.com/glfw/glfw.git "${GLFW_GIT_REF}")
+fetch_git_dependency(glew https://github.com/Perlmint/glew-cmake.git "${GLEW_GIT_REF}")
+fetch_git_dependency(stb https://github.com/nothings/stb.git "${STB_GIT_REF}")
 
 add_subdirectory("${glfw_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/3rd/glfw-build")
 

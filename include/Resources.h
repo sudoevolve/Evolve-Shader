@@ -9,15 +9,23 @@
 
 namespace fs = std::filesystem;
 
-inline std::map<std::string, Texture> g_globalTextureCache;
+inline std::map<std::string, Texture>& GlobalTextureCache() {
+    static std::map<std::string, Texture> cache;
+    return cache;
+}
+
+inline void ClearGlobalTextureCache() {
+    GlobalTextureCache().clear();
+}
 
 inline Texture* GetTextureForPath(const std::string& path) {
-    auto it = g_globalTextureCache.find(path);
-    if (it != g_globalTextureCache.end()) return &it->second;
+    auto& cache = GlobalTextureCache();
+    auto it = cache.find(path);
+    if (it != cache.end()) return &it->second;
     Texture tex;
     if (tex.loadFromFile(path)) {
         std::cout << "Loaded texture: " << path << " (" << tex.width << "x" << tex.height << ")\n";
-        auto result = g_globalTextureCache.emplace(path, std::move(tex));
+        auto result = cache.emplace(path, std::move(tex));
         return &result.first->second;
     }
     else {
@@ -32,7 +40,6 @@ inline std::vector<fs::path> ScanGlobalImages(const fs::path& dir = "iChannel") 
     std::vector<fs::path> images;
     std::vector<std::string> extensions = { ".png", ".jpg", ".jpeg" };
     if (!fs::exists(dir) || !fs::is_directory(dir)) {
-        // std::cerr << "Warning: '" << dir.string() << "' folder not found.\n";
         return images;
     }
     for (const auto& entry : fs::recursive_directory_iterator(dir)) {
