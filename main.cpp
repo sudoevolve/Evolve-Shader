@@ -12,6 +12,7 @@
 #include <vector>
 
 #ifdef _WIN32
+#define NOMINMAX
 #include <windows.h>
 #elif defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -360,7 +361,7 @@ PresentPass BuildPresentPass() {
     return pass;
 }
 
-WindowHandle CreateWindow(AppContext& app, bool vsyncEnabled) {
+WindowHandle CreateGLWindow(AppContext& app, bool vsyncEnabled) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -662,7 +663,7 @@ int main() {
     }
 
     AppContext app;
-    WindowHandle window = CreateWindow(app, vsyncEnabled);
+    WindowHandle window = CreateGLWindow(app, vsyncEnabled);
     if (!window) {
         return -1;
     }
