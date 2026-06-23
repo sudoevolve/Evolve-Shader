@@ -1,0 +1,16 @@
+{
+  "passes": [
+    [
+      { "type": 2, "bufferIndex": 0 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 }
+    ],
+    [
+      { "type": 2, "bufferIndex": 0 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 },
+      { "type": 0, "bufferIndex": -1 }
+    ]
+  ]
+}
