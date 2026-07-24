@@ -60,8 +60,20 @@ struct Texture {
         if (!data) {
             data = stbi_load(path.c_str(), &width, &height, &nChannels, 0);
         }
+
         if (!data) {
             std::cerr << "Failed to load texture: " << path << std::endl;
+            createEmpty();
+            return false;
+        }
+
+        GLint maxTextureSize = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+        if (width <= 0 || height <= 0 || maxTextureSize <= 0
+            || width > maxTextureSize || height > maxTextureSize) {
+            std::cerr << "Texture exceeds supported dimensions: " << path << " ("
+                << width << "x" << height << ", max " << maxTextureSize << ")" << std::endl;
+            stbi_image_free(data);
             createEmpty();
             return false;
         }
@@ -196,6 +208,14 @@ public:
             return false;
         }
 
+        GLint maxTextureSize = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+        if (maxTextureSize <= 0 || w > maxTextureSize || h > maxTextureSize) {
+            std::cerr << "Framebuffer size exceeds supported texture dimensions ("
+                << w << "x" << h << ", max " << maxTextureSize << ")" << std::endl;
+            return false;
+        }
+
         destroy();
         glGenFramebuffers(1, &fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -218,6 +238,7 @@ public:
         }
         else {
             std::cerr << "Framebuffer incomplete (" << w << "x" << h << ")" << std::endl;
+            destroy();
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return complete;

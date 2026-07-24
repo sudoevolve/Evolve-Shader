@@ -209,8 +209,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 ## 当前限制与说明
 
 - 第三方源码会在 CMake 配置阶段拉取到 `3rd/`。
-- `iChannel` 配置只在运行时交互输入，不会保存到磁盘。
-- Shader 只在启动时加载一次，目前没有热重载。
+- 启动时可按提示将 `iChannel` 配置保存为预设。
+- 在 Windows、macOS 和 Linux 上，活动 `frag/` 目录中的 shader 保存后会立即重载；若编译失败，屏幕会保留上一版可用 shader。
+- 使用 Visual Studio 调试时，程序会自动以仓库根目录为工作目录。若通过终端启动，请在仓库根目录运行 `build/Release/EvolveShader.exe`，这样直接编辑 `frag/` 中的文件就会触发重载。
 - 屏幕上最终显示的永远是最后一个 pass。
 - `iChannel` 配置仍然是运行时交互输入，但已配置的图片会在进入渲染循环前预加载。
 - `frag/` 里的示例 shader 自带上游署名注释，请保留它们原本的授权说明。

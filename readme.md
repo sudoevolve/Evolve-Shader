@@ -209,10 +209,11 @@ The runtime wraps your shader automatically.
 ## Notes and Limitations
 
 - Third-party sources are fetched into `3rd/` during CMake configure.
-- Channel configuration is interactive only; it is not saved to disk.
-- Shader files are loaded only once at startup; there is no hot reload.
+- Channel configuration can be saved as a preset when prompted at startup.
+- On Windows, macOS, and Linux, saved changes under the active `frag/` directory trigger an immediate shader reload. A failed compile keeps the last working shader on screen.
+- For live editing from Visual Studio, the debugger runs from the repository root automatically. From a terminal, run `build/Release/EvolveShader.exe` while your current directory is the repository root so edits to `frag/` are watched directly.
 - The last pass is always the one presented to the screen.
-- Channel configuration is still interactive only; image bindings are preloaded after configuration.
+- Image bindings are preloaded after configuration.
 - The sample shaders in `frag/` include their own upstream attribution comments.
 
 ## License

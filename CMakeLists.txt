@@ -8,8 +8,9 @@ project(EvolveShader
 
 find_package(Git REQUIRED)
 
-set(GLFW_GIT_REF 3.4)
-set(GLEW_GIT_REF glew-cmake-2.2.0)
+# Immutable upstream revisions keep configure-time downloads reproducible.
+set(GLFW_GIT_REF a74efa0d5628b74adc0426af4c5710e287fa7c2c)
+set(GLEW_GIT_REF f456deace7b408655109aaeff71421ef2d3858c6)
 set(STB_GIT_REF 31c1ad37456438565541f4919958214b6e762fb4)
 
 function(fetch_git_dependency name repository ref)
@@ -83,10 +84,12 @@ target_include_directories(EvolveShader
 )
 
 find_package(OpenGL REQUIRED)
+find_package(Threads REQUIRED)
 
 target_link_libraries(EvolveShader
     PRIVATE
         OpenGL::GL
+        Threads::Threads
         glfw
         libglew_static
 )
@@ -102,7 +105,9 @@ if(APPLE)
 endif()
 
 set_target_properties(EvolveShader PROPERTIES
-    VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:EvolveShader>"
+    # During development, load and watch the source assets rather than the
+    # post-build copies next to the executable.
+    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
 set(EVOLVE_SHADER_RUNTIME_DIRS frag iChannel presets)

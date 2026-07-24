@@ -1,6 +1,7 @@
 // main.cpp - Multi-pass Shader Renderer with Full RAII and Cross-Pass iChannel Support
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <ctime>
@@ -9,6 +10,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -17,8 +19,13 @@
 #elif defined(__APPLE__)
 #include <mach-o/dyld.h>
 #include <cstdlib>
+#include <fcntl.h>
+#include <sys/event.h>
+#include <unistd.h>
 #else
 #include <limits.h>
+#include <poll.h>
+#include <sys/inotify.h>
 #include <unistd.h>
 #endif
 
@@ -27,6 +34,7 @@
 #include <GLFW/glfw3.h>
 
 #define STB_IMAGE_IMPLEMENTATION
+#define STBI_MAX_DIMENSIONS 16384
 
 #ifdef _MSC_VER
 #pragma warning(disable : 4244)
@@ -64,6 +72,7 @@ struct AppContext {
     std::chrono::steady_clock::time_point start;
     std::vector<Framebuffer>* pingFbos = nullptr;
     std::vector<Framebuffer>* pongFbos = nullptr;
+    bool renderTargetsValid = true;
 };
 
 struct ProgramUniforms {
@@ -83,6 +92,8 @@ struct ProgramUniforms {
 struct ShaderPass {
     GLProgram program;
     ProgramUniforms uniforms;
+    std::string sourcePath;
+    fs::file_time_type lastWriteTime{};
 };
 
 struct PresentPass {
@@ -243,20 +254,21 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     }
 }
 
-void resizeAllRenderTargets(std::vector<Framebuffer>& pingFbos,
+bool resizeAllRenderTargets(std::vector<Framebuffer>& pingFbos,
     std::vector<Framebuffer>& pongFbos,
     int width,
     int height) {
     if (width <= 0 || height <= 0) {
-        return;
+        return false;
     }
 
     for (auto& fbo : pingFbos) {
-        fbo.create(width, height);
+        if (!fbo.create(width, height)) return false;
     }
     for (auto& fbo : pongFbos) {
-        fbo.create(width, height);
+        if (!fbo.create(width, height)) return false;
     }
+    return true;
 }
 
 void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
@@ -270,7 +282,10 @@ void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
         app->frame = 0;
 
         if (app->pingFbos && app->pongFbos) {
-            resizeAllRenderTargets(*app->pingFbos, *app->pongFbos, width, height);
+            app->renderTargetsValid = resizeAllRenderTargets(*app->pingFbos, *app->pongFbos, width, height);
+            if (!app->renderTargetsValid) {
+                std::cerr << "Unable to recreate render targets for " << width << "x" << height << ".\n";
+            }
         }
     }
 
@@ -346,11 +361,212 @@ std::vector<ShaderPass> BuildShaderPasses(const std::vector<std::string>& fragFi
         }
 
         pass.uniforms = CacheProgramUniforms(pass.program);
+        pass.sourcePath = file;
+        std::error_code timeError;
+        pass.lastWriteTime = fs::last_write_time(file, timeError);
+        if (timeError) {
+            std::cerr << "Failed to read shader timestamp: " << file << "\n";
+            return {};
+        }
         passes.emplace_back(std::move(pass));
     }
 
     return passes;
 }
+
+void ReloadModifiedShaders(std::vector<ShaderPass>& passes) {
+    for (auto& pass : passes) {
+        std::error_code timeError;
+        const fs::file_time_type writeTime = fs::last_write_time(pass.sourcePath, timeError);
+        if (timeError || writeTime == pass.lastWriteTime) {
+            continue;
+        }
+
+        pass.lastWriteTime = writeTime;
+        const std::string code = LoadShaderFile(pass.sourcePath);
+        if (code.empty()) {
+            std::cerr << "Hot reload failed; keeping the previous shader: " << pass.sourcePath << "\n";
+            continue;
+        }
+
+        const std::string wrappedCode = WrapShadertoyShader(code);
+        GLProgram replacement(vertShaderSrc, wrappedCode.c_str());
+        if (!replacement.id) {
+            std::cerr << "Hot reload failed; keeping the previous shader: " << pass.sourcePath << "\n";
+            continue;
+        }
+
+        ProgramUniforms replacementUniforms = CacheProgramUniforms(replacement);
+        replacement.use();
+        for (int channel = 0; channel < kChannelCount; ++channel) {
+            if (replacementUniforms.iChannel[channel] != -1) {
+                glUniform1i(replacementUniforms.iChannel[channel], channel);
+            }
+        }
+
+        pass.program = std::move(replacement);
+        pass.uniforms = replacementUniforms;
+        std::cout << "Hot reloaded shader: " << fs::path(pass.sourcePath).filename().string() << "\n";
+    }
+}
+
+class ShaderChangeWatcher {
+public:
+    explicit ShaderChangeWatcher(const fs::path& directory) {
+#ifdef _WIN32
+        worker = std::thread([this, directory] { watch(directory); });
+#elif defined(__APPLE__)
+        startMacWatcher(directory);
+#elif defined(__linux__)
+        startLinuxWatcher(directory);
+#else
+        std::cerr << "Hot reload is unavailable on this platform.\n";
+        (void)directory;
+#endif
+    }
+
+    ~ShaderChangeWatcher() {
+#ifdef _WIN32
+        stopping = true;
+        const HANDLE handle = directoryHandle.load();
+        if (handle != INVALID_HANDLE_VALUE) {
+            CancelIoEx(handle, nullptr);
+        }
+        if (worker.joinable()) {
+            worker.join();
+        }
+#elif defined(__APPLE__)
+        if (kqueueHandle != -1) {
+            struct kevent stopEvent;
+            EV_SET(&stopEvent, 1, EVFILT_USER, 0, NOTE_TRIGGER, 0, nullptr);
+            kevent(kqueueHandle, &stopEvent, 1, nullptr, 0, nullptr);
+        }
+        if (worker.joinable()) {
+            worker.join();
+        }
+        if (directoryHandle != -1) close(directoryHandle);
+        if (kqueueHandle != -1) close(kqueueHandle);
+#elif defined(__linux__)
+        if (stopPipe[1] != -1) {
+            const char stopSignal = 0;
+            write(stopPipe[1], &stopSignal, 1);
+        }
+        if (worker.joinable()) {
+            worker.join();
+        }
+        if (inotifyHandle != -1) close(inotifyHandle);
+        if (stopPipe[0] != -1) close(stopPipe[0]);
+        if (stopPipe[1] != -1) close(stopPipe[1]);
+#endif
+    }
+
+    bool consumeReloadRequest() {
+        return reloadRequested.exchange(false);
+    }
+
+private:
+    std::atomic_bool reloadRequested{ false };
+#ifdef _WIN32
+    std::atomic_bool stopping{ false };
+    std::atomic<HANDLE> directoryHandle{ INVALID_HANDLE_VALUE };
+    std::thread worker;
+
+    void watch(const fs::path& directory) {
+        const HANDLE handle = CreateFileW(directory.c_str(), FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            std::cerr << "Hot reload is unavailable: cannot watch " << directory.string() << "\n";
+            return;
+        }
+
+        directoryHandle = handle;
+        std::array<BYTE, 4096> changes{};
+        while (!stopping) {
+            DWORD bytesReturned = 0;
+            const BOOL success = ReadDirectoryChangesW(handle, changes.data(), static_cast<DWORD>(changes.size()),
+                FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME,
+                &bytesReturned, nullptr, nullptr);
+            if (!success) {
+                if (!stopping) {
+                    std::cerr << "Hot reload watcher stopped for " << directory.string() << "\n";
+                }
+                break;
+            }
+            if (bytesReturned != 0) {
+                reloadRequested = true;
+            }
+        }
+        CloseHandle(handle);
+        directoryHandle = INVALID_HANDLE_VALUE;
+    }
+#endif
+
+#ifdef __APPLE__
+    int kqueueHandle = -1;
+    int directoryHandle = -1;
+    std::thread worker;
+
+    void startMacWatcher(const fs::path& directory) {
+        kqueueHandle = kqueue();
+        directoryHandle = open(directory.c_str(), O_EVTONLY);
+        if (kqueueHandle == -1 || directoryHandle == -1) {
+            std::cerr << "Hot reload is unavailable: cannot watch " << directory.string() << "\n";
+            return;
+        }
+
+        struct kevent events[2];
+        EV_SET(&events[0], directoryHandle, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+            NOTE_WRITE | NOTE_RENAME | NOTE_DELETE, 0, nullptr);
+        EV_SET(&events[1], 1, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+        if (kevent(kqueueHandle, events, 2, nullptr, 0, nullptr) == -1) {
+            std::cerr << "Hot reload is unavailable: cannot register watcher for " << directory.string() << "\n";
+            return;
+        }
+        worker = std::thread([this] { watchMac(); });
+    }
+
+    void watchMac() {
+        while (true) {
+            struct kevent event;
+            if (kevent(kqueueHandle, nullptr, 0, &event, 1, nullptr) == -1) break;
+            if (event.filter == EVFILT_USER) break;
+            if (event.filter == EVFILT_VNODE) reloadRequested = true;
+        }
+    }
+#endif
+
+#ifdef __linux__
+    int inotifyHandle = -1;
+    int stopPipe[2]{ -1, -1 };
+    std::thread worker;
+
+    void startLinuxWatcher(const fs::path& directory) {
+        inotifyHandle = inotify_init1(IN_CLOEXEC);
+        if (inotifyHandle == -1 || pipe(stopPipe) == -1
+            || inotify_add_watch(inotifyHandle, directory.c_str(),
+                IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE | IN_ATTRIB) == -1) {
+            std::cerr << "Hot reload is unavailable: cannot watch " << directory.string() << "\n";
+            return;
+        }
+        worker = std::thread([this] { watchLinux(); });
+    }
+
+    void watchLinux() {
+        std::array<char, 4096> changes{};
+        struct pollfd descriptors[2] = {
+            { inotifyHandle, POLLIN, 0 },
+            { stopPipe[0], POLLIN, 0 }
+        };
+        while (poll(descriptors, 2, -1) > 0) {
+            if ((descriptors[1].revents & POLLIN) != 0) break;
+            if ((descriptors[0].revents & POLLIN) != 0 && read(inotifyHandle, changes.data(), changes.size()) > 0) {
+                reloadRequested = true;
+            }
+        }
+    }
+#endif
+};
 
 PresentPass BuildPresentPass() {
     PresentPass pass;
@@ -652,7 +868,7 @@ int main() {
             std::cout << "Enter preset name: ";
             std::getline(std::cin, line);
             if (!line.empty()) {
-                SavePreset(line, fragFiles, globalImages, channelConfig, presetsDir);
+                SavePreset(line, fragFiles, globalImages, channelConfig, iChannelDir, presetsDir);
             }
         }
     }
@@ -719,7 +935,10 @@ int main() {
     std::vector<Framebuffer> pongFbos(passes.size());
     app.pingFbos = &pingFbos;
     app.pongFbos = &pongFbos;
-    resizeAllRenderTargets(pingFbos, pongFbos, app.winWidth, app.winHeight);
+    if (!resizeAllRenderTargets(pingFbos, pongFbos, app.winWidth, app.winHeight)) {
+        std::cerr << "Unable to create render targets. Check OpenGL float-texture support and available GPU memory.\n";
+        return -1;
+    }
 
     const std::vector<PassChannelBindings> channelBindings = BuildChannelBindings(channelConfig, globalImages);
 
@@ -727,6 +946,7 @@ int main() {
     emptyTex.createEmpty();
 
     InitializeStaticSamplerUniforms(passes, presentPass);
+    ShaderChangeWatcher shaderChangeWatcher(fragDir);
 
     app.start = std::chrono::steady_clock::now();
     float lastTimeSeconds = 0.0f;
@@ -740,11 +960,14 @@ int main() {
         UpdateWindowTitle(window.get(), currentTime, lastFpsTime, frameCount);
 
         const auto now = std::chrono::steady_clock::now();
+        if (shaderChangeWatcher.consumeReloadRequest()) {
+            ReloadModifiedShaders(passes);
+        }
         const float timeSeconds = std::chrono::duration<float>(now - app.start).count();
         const float deltaTimeSeconds = timeSeconds - lastTimeSeconds;
         lastTimeSeconds = timeSeconds;
 
-        if (app.winWidth <= 0 || app.winHeight <= 0) {
+        if (app.winWidth <= 0 || app.winHeight <= 0 || !app.renderTargetsValid) {
             glfwPollEvents();
             continue;
         }
