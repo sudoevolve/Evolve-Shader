@@ -218,6 +218,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 
 ## 许可证
 
-项目本身使用 MIT 许可证，见 `LICENSE`。
+项目本身使用 Apache License 2.0，见 `LICENSE`。
 
 第三方 shader、图片资源可能带有独立授权或署名要求，使用前请分别确认。

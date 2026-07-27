@@ -218,6 +218,6 @@ The runtime wraps your shader automatically.
 
 ## License
 
-The project is distributed under the MIT license. See `LICENSE`.
+The project is distributed under the Apache License 2.0. See `LICENSE`.
 
 Third-party shader or image assets may have their own licenses or attribution requirements.
