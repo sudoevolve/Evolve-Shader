@@ -167,7 +167,6 @@ public:
     }
     ~VertexBuffer() { destroy(); }
     void bind() const { if (id) glBindBuffer(GL_ARRAY_BUFFER, id); }
-    static void unbind() { glBindBuffer(GL_ARRAY_BUFFER, 0); }
     void destroy() { if (id) { glDeleteBuffers(1, &id); id = 0; } }
 };
 

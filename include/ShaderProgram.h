@@ -51,7 +51,6 @@ public:
     GLProgram() = default;
     explicit GLProgram(const char* vertSrc, const char* fragSrc) {
         id = CreateProgram(vertSrc, fragSrc);
-        uniformCache.clear();
     }
     GLProgram(const GLProgram&) = delete;
     GLProgram& operator=(const GLProgram&) = delete;

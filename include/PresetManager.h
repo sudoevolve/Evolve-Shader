@@ -7,7 +7,6 @@
 #include <limits>
 #include <regex>
 #include <array>
-#include <cctype>
 #include "ChannelConfig.h"
 
 namespace fs = std::filesystem;
